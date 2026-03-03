@@ -1,0 +1,4 @@
+autofile/
+backup/
+**/backup/
+*.xlsx
