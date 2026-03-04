@@ -432,4 +432,46 @@
   原因：中间节指向无PAGE域页脚或页脚引用不一致。  
   修复：所有节 `footerReference` 统一，并验证对应footer XML包含 `PAGE` 域。
 
+============================================================
+14) 图表测试套件（pytest，新增）
+============================================================
+为补齐“独立测试 / 图像级验证 / 数据点回放断言”，仓库新增 `tests/` 测试集：
+
+- `tests/test_ch4_data_integrity.py`
+  * 第四章数据读取与聚合基础正确性（季度排序、份额合计、CR5范围、YoY通道完整）
+- `tests/test_figure_quality.py`
+  * 图文件完整性与图像非空白检测（尺寸、灰度方差、非白像素占比）
+- `tests/test_figure_data_replay.py`
+  * 逐图数据点回放断言（fig_4_1/fig_4_4/fig_4_8 的绘图数据与聚合表一致）
+- `tests/test_visual_regression.py`
+  * 可选视觉回归（若存在 baseline 图则执行；无 baseline 自动跳过）
+
+运行前依赖：
+
+```powershell
+python -m pip install pytest pillow
+```
+
+运行测试：
+
+```powershell
+python -m pytest
+```
+
+仅运行图表相关测试：
+
+```powershell
+python -m pytest tests/test_figure_quality.py tests/test_figure_data_replay.py
+```
+
+生成/更新视觉回归 baseline（用于 `test_visual_regression.py`）：
+
+```powershell
+python scripts/generate_figure_baseline.py --disease 颈椎病
+```
+
+baseline 默认输出到：
+
+- `tests/baselines/figures/fig_*.png`
+
 

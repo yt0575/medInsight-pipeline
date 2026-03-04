@@ -2800,7 +2800,9 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     ch4_fig_count = len([f for f in fig_files if f.stem.startswith("fig_4_")])
 
     doc_xml = extract_docx_text_xml(FINAL_DOCX)
-    placeholder_keys = ["XXX", "<<<", "AAA"] + LEGACY_DISEASE_TOKENS
+    current_disease_token = DISEASE_NAME.strip()
+    legacy_placeholder_tokens = [t for t in LEGACY_DISEASE_TOKENS if t.strip() and t.strip() != current_disease_token]
+    placeholder_keys = ["XXX", "<<<", "AAA"] + legacy_placeholder_tokens
     placeholder_hits = {k: doc_xml.count(k) for k in placeholder_keys}
 
     with zipfile.ZipFile(FINAL_DOCX, "r") as zf:
