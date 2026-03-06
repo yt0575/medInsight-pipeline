@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 import re
 import shutil
@@ -17,7 +18,9 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple
+from typing import Dict, List, Tuple
+from urllib.parse import quote_plus, urlparse
+from urllib.request import urlopen
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -25,6 +28,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.patches import FancyBboxPatch
 from docx import Document
+from openpyxl import load_workbook
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches
 
@@ -34,12 +38,14 @@ matplotlib.rcParams["axes.unicode_minus"] = False
 
 
 DISEASE_NAME = "示例疾病"
-REPORT_TITLE = f"《{DISEASE_NAME}市场分析报告》"
+REPORT_TITLE = f"《{DISEASE_NAME}疾病市场分析报告》"
 EXCEL_PATH = Path(f"{DISEASE_NAME}第四章数据.xlsx")
 TEMPLATE_PATH = Path("template.docx")
 OUT_ROOT = Path("autofile") / DISEASE_NAME
 FIG_DIR = OUT_ROOT / "figures"
 FINAL_DOCX = OUT_ROOT / f"{REPORT_TITLE}_final.docx"
+LITE_OUTPUT = False
+WORKFLOW_MODE = "assistant"
 
 LEGACY_DISEASE_TOKENS = [
     "儿童止咳祛痰",
@@ -50,6 +56,11 @@ LEGACY_DISEASE_TOKENS = [
 ]
 
 QUARTER_RE = re.compile(r"^(20\d{2})Q([1-4])$")
+FIG_TITLE_SERIAL_RE = re.compile(r"^\s*图表\d+-\d+[：:]\s*")
+FIG23_CODEX_SPEC_NAME = "fig23_codex_spec.json"
+FIG23_CODEX_SPEC_TEMPLATE_NAME = "fig23_codex_spec_template.json"
+FIG23_CODEX_PROMPT_NAME = "fig23_codex_prompt.txt"
+CODEX_CONTENT_BLUEPRINT_NAME = "codex_content_blueprint.txt"
 CHAPTER_MIN_CHARS = {
     1: 3000,
     2: 3500,
@@ -59,6 +70,19 @@ CHAPTER_MIN_CHARS = {
     6: 4800,
     7: 4800,
 }
+LOW_CONFIDENCE_PROFILE_KEYWORDS = {
+    "疼痛",
+    "炎症",
+    "感染",
+    "综合征",
+    "障碍",
+    "疾病",
+    "病症",
+    "骨科",
+}
+PROFILE_CONFIG_PATH = Path(__file__).with_name("disease_profiles.json")
+_PROFILE_CONFIG_CACHE: Dict[str, object] | None = None
+_ACTIVE_PROFILE_CACHE: Tuple[str, str] | None = None
 
 
 def qkey(q: str) -> int:
@@ -89,10 +113,815 @@ def normalize_disease_text(text: str) -> str:
     return out
 
 
+def strip_figure_serial_prefix(text: str) -> str:
+    raw = normalize_disease_text(str(text)).strip()
+    return FIG_TITLE_SERIAL_RE.sub("", raw, count=1).strip()
+
+
+def compose_figure_title(serial: str, title_fragment: str) -> str:
+    fragment = strip_figure_serial_prefix(title_fragment)
+    if not fragment:
+        return f"图表{serial}"
+    return normalize_disease_text(f"图表{serial}：{fragment}")
+
+
+def normalize_reference_line(line: str) -> str:
+    out = normalize_disease_text(str(line))
+    for token in ["\u00A0", "\u2002", "\u2003", "\u2009", "\u202F", "\u3000", "\t"]:
+        out = out.replace(token, " ")
+    out = re.sub(r" {2,}", " ", out)
+    return out.strip()
+
+
+def _is_codex_authored_marker(value: object) -> bool:
+    marker = str(value).strip().lower()
+    return marker in {"codex", "openai-codex", "codex-cli"}
+
+
+def read_fig23_codex_spec() -> Dict[str, object]:
+    path = OUT_ROOT / FIG23_CODEX_SPEC_NAME
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def fig23_codex_authored_ok() -> bool:
+    raw = read_fig23_codex_spec()
+    if not raw:
+        return False
+    marker = raw.get("authored_by", raw.get("generated_by", ""))
+    return _is_codex_authored_marker(marker)
+
+
+def fig23_spec_origin(profile_id: str | None = None) -> str:
+    if read_fig23_codex_spec():
+        return "codex_spec"
+
+    file_path = OUT_ROOT / "figure_specs.json"
+    if file_path.exists():
+        try:
+            raw = json.loads(file_path.read_text(encoding="utf-8"))
+        except Exception:
+            raw = {}
+        if isinstance(raw, dict) and isinstance(raw.get("fig_2_3"), dict):
+            return "figure_specs"
+
+    profile = get_profile_data(profile_id)
+    figure_specs = profile.get("figure_specs", {})
+    if isinstance(figure_specs, dict) and isinstance(figure_specs.get("fig_2_3"), dict):
+        return "profile"
+    return "profile"
+
+
 def normalize_disease_value(value):
     if isinstance(value, str):
         return normalize_disease_text(value)
     return value
+
+
+def load_disease_profiles() -> Dict[str, object]:
+    global _PROFILE_CONFIG_CACHE
+    if _PROFILE_CONFIG_CACHE is not None:
+        return _PROFILE_CONFIG_CACHE
+
+    fallback: Dict[str, object] = {
+        "default_profile": "generic",
+        "profiles": [
+            {"id": "cervical", "priority": 100, "keywords": ["颈椎", "腰椎", "脊柱", "关节", "骨", "肌", "疼痛", "骨科", "椎间盘"], "query_aliases": {"颈椎病": "cervical spondylosis"}, "fig23_layout_mode": "dual_panel", "fig23_require_core_node": True, "fig23_core_label_template": "{disease}\n核心病理负担", "fig23_disallow_nodes": ["代谢系统", "营养状态"], "fig23_top_to_core": ["神经系统", "肌肉骨骼系统", "血管系统"], "fig23_core_to_bottom": ["睡眠系统", "心理行为", "内分泌代谢"], "fig23_dual_panel": {}, "fig23_semantic": {"expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）", "forbidden_title_templates": []}},
+            {"id": "gastritis", "priority": 110, "keywords": ["慢性胃炎", "胃炎", "萎缩性胃炎", "胃黏膜", "幽门螺杆菌", "消化不良", "胃病", "反流性胃炎"], "query_aliases": {"慢性胃炎": "chronic gastritis", "萎缩性胃炎": "atrophic gastritis"}, "fig23_layout_mode": "causal_chain", "fig23_require_core_node": True, "fig23_core_label_template": "{disease}\n(胃黏膜炎症)", "fig23_disallow_nodes": ["代谢系统", "营养状态"], "fig23_top_to_core": [], "fig23_core_to_bottom": [], "fig23_semantic": {"expected_title_template": "图表2-3：{disease}病因-病理-临床后果关系图（分层布局）", "forbidden_title_templates": ["图表2-3：{disease}相关系统关系图（分层布局）"]}},
+            {"id": "pharyngitis", "priority": 108, "keywords": ["慢性咽炎", "咽炎", "咽喉炎", "咽喉", "咽部", "咽痛", "咽异物感"], "query_aliases": {"慢性咽炎": "chronic pharyngitis", "慢性咽喉炎": "chronic pharyngolaryngitis"}, "fig23_layout_mode": "systems_map", "fig23_require_core_node": True, "fig23_core_label_template": "{disease}\n(咽黏膜慢性炎症)", "fig23_disallow_nodes": ["代谢系统", "营养状态"], "fig23_top_to_core": ["免疫系统", "神经系统", "上气道微生态"], "fig23_core_to_bottom": ["耳鼻喉症状", "睡眠系统", "心理行为"], "fig23_semantic": {"expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）", "forbidden_title_templates": []}},
+            {"id": "osteoarthritis", "priority": 112, "keywords": ["骨关节炎", "膝骨关节炎", "髋骨关节炎", "退行性关节炎", "osteoarthritis", "OA"], "query_aliases": {"骨关节炎": "osteoarthritis", "膝骨关节炎": "knee osteoarthritis"}, "fig23_layout_mode": "systems_map", "fig23_require_core_node": True, "fig23_core_label_template": "{disease}\n(关节软骨退变)", "fig23_disallow_nodes": ["代谢系统", "营养状态"], "fig23_top_to_core": ["免疫系统", "神经系统", "肌肉骨骼系统"], "fig23_core_to_bottom": ["运动功能", "睡眠系统", "心理行为"], "fig23_semantic": {"expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）", "forbidden_title_templates": []}},
+            {"id": "respiratory", "priority": 90, "keywords": ["咳", "痰", "呼吸", "肺", "哮喘", "支气管", "气道", "感冒", "鼻炎"], "query_aliases": {"儿童止咳祛痰": "pediatric cough expectorant", "儿童咳嗽": "pediatric chronic cough"}, "fig23_layout_mode": "systems_map", "fig23_require_core_node": True, "fig23_core_label_template": "{disease}\n核心病理负担", "fig23_disallow_nodes": ["代谢系统", "营养状态"], "fig23_top_to_core": ["神经系统", "内分泌系统", "免疫系统"], "fig23_core_to_bottom": ["呼吸系统", "消化系统", "肌肉骨骼系统"], "fig23_semantic": {"expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）", "forbidden_title_templates": []}},
+            {"id": "generic", "priority": 0, "keywords": [], "query_aliases": {}, "fig23_layout_mode": "systems_map", "fig23_require_core_node": True, "fig23_core_label_template": "{disease}\n核心病理负担", "fig23_disallow_nodes": ["代谢系统", "营养状态"], "fig23_top_to_core": ["神经系统", "内分泌系统", "免疫系统"], "fig23_core_to_bottom": ["心血管系统", "消化系统", "肾脏系统"], "fig23_semantic": {"expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）", "forbidden_title_templates": []}},
+        ],
+    }
+
+    if not PROFILE_CONFIG_PATH.exists():
+        _PROFILE_CONFIG_CACHE = fallback
+        return _PROFILE_CONFIG_CACHE
+
+    try:
+        raw = json.loads(PROFILE_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        _PROFILE_CONFIG_CACHE = fallback
+        return _PROFILE_CONFIG_CACHE
+
+    profiles = raw.get("profiles", [])
+    if not isinstance(profiles, list) or not profiles:
+        _PROFILE_CONFIG_CACHE = fallback
+        return _PROFILE_CONFIG_CACHE
+
+    default_profile = str(raw.get("default_profile", "generic")).strip() or "generic"
+    normalized_profiles: List[Dict[str, object]] = []
+    for p in profiles:
+        if not isinstance(p, dict):
+            continue
+        pid = str(p.get("id", "")).strip()
+        if not pid:
+            continue
+        normalized_profiles.append(
+            {
+                "id": pid,
+                "priority": int(p.get("priority", 0)),
+                "keywords": [str(x).strip() for x in (p.get("keywords") or []) if str(x).strip()],
+                "query_aliases": {str(k).strip(): str(v).strip() for k, v in (p.get("query_aliases") or {}).items() if str(k).strip() and str(v).strip()},
+                "fig23_layout_mode": str(p.get("fig23_layout_mode", "systems_map")).strip() or "systems_map",
+                "fig23_require_core_node": bool(p.get("fig23_require_core_node", False)),
+                "fig23_core_label_template": str(p.get("fig23_core_label_template", "{disease}\n核心病理负担")).strip() or "{disease}\n核心病理负担",
+                "fig23_disallow_nodes": [str(x).strip() for x in (p.get("fig23_disallow_nodes") or []) if str(x).strip()],
+                "fig23_top_to_core": [str(x).strip() for x in (p.get("fig23_top_to_core") or []) if str(x).strip()],
+                "fig23_core_to_bottom": [str(x).strip() for x in (p.get("fig23_core_to_bottom") or []) if str(x).strip()],
+                "fig23_dual_panel": p.get("fig23_dual_panel") if isinstance(p.get("fig23_dual_panel"), dict) else {},
+                "fig23_semantic": p.get("fig23_semantic") or {},
+                "figure_specs": p.get("figure_specs") if isinstance(p.get("figure_specs"), dict) else {},
+            }
+        )
+    if not normalized_profiles:
+        _PROFILE_CONFIG_CACHE = fallback
+        return _PROFILE_CONFIG_CACHE
+
+    profile_ids = {str(x.get("id", "")) for x in normalized_profiles}
+    if default_profile not in profile_ids:
+        default_profile = "generic" if "generic" in profile_ids else str(normalized_profiles[-1].get("id", "generic"))
+    _PROFILE_CONFIG_CACHE = {"default_profile": default_profile, "profiles": normalized_profiles}
+    return _PROFILE_CONFIG_CACHE
+
+
+def sorted_profiles() -> List[Dict[str, object]]:
+    cfg = load_disease_profiles()
+    profiles = list(cfg.get("profiles", []))
+    profiles.sort(key=lambda x: int(x.get("priority", 0)), reverse=True)
+    return profiles
+
+
+def _normalize_profile_match_text(value: str) -> str:
+    return re.sub(r"[\s\-_()（）·]+", "", str(value).strip().lower())
+
+
+def _is_low_confidence_keyword(keyword: str) -> bool:
+    kw = str(keyword).strip().lower()
+    if not kw:
+        return True
+    if len(kw) <= 1:
+        return True
+    return kw in LOW_CONFIDENCE_PROFILE_KEYWORDS
+
+
+def resolve_profile_id(disease_name: str) -> str:
+    name = disease_name.strip()
+    cfg = load_disease_profiles()
+    default_id = str(cfg.get("default_profile", "generic"))
+    if not name:
+        return default_id
+
+    normalized_name = _normalize_profile_match_text(name)
+
+    # 1) Exact match first: query_alias key / profile keyword.
+    for p in sorted_profiles():
+        pid = str(p.get("id", "")).strip()
+        aliases = p.get("query_aliases", {}) or {}
+        if isinstance(aliases, dict):
+            for alias in aliases.keys():
+                if _normalize_profile_match_text(str(alias)) == normalized_name:
+                    return pid
+        for kw in p.get("keywords", []):
+            if _normalize_profile_match_text(str(kw)) == normalized_name:
+                return pid
+
+    # 2) Fuzzy match with confidence scoring. A profile must have at least one
+    # high-confidence hit; low-confidence generic tokens (e.g. "疼痛") cannot
+    # decide profile alone.
+    best_pid = default_id
+    best_score = 0.0
+    best_priority = -10**9
+    for p in sorted_profiles():
+        pid = str(p.get("id", "")).strip()
+        score = 0.0
+        has_high_conf_hit = False
+        for kw in p.get("keywords", []):
+            sk = str(kw).strip()
+            if not sk or sk not in name:
+                continue
+            if _is_low_confidence_keyword(sk):
+                score += 0.25
+            else:
+                has_high_conf_hit = True
+                score += 1.0 + min(len(sk), 8) * 0.15
+        if (not has_high_conf_hit) or score <= 0:
+            continue
+        pri = int(p.get("priority", 0))
+        if (score > best_score) or (math.isclose(score, best_score) and pri > best_priority):
+            best_score = score
+            best_priority = pri
+            best_pid = pid
+
+    if best_score > 0:
+        return best_pid
+    return default_id
+
+
+def active_profile_id() -> str:
+    global _ACTIVE_PROFILE_CACHE
+    name = DISEASE_NAME.strip()
+    if _ACTIVE_PROFILE_CACHE and _ACTIVE_PROFILE_CACHE[0] == name:
+        return _ACTIVE_PROFILE_CACHE[1]
+    pid = resolve_profile_id(name)
+    _ACTIVE_PROFILE_CACHE = (name, pid)
+    return pid
+
+
+def get_profile_data(profile_id: str | None = None) -> Dict[str, object]:
+    pid = profile_id or active_profile_id()
+    for p in sorted_profiles():
+        if str(p.get("id", "")).strip() == pid:
+            return p
+    cfg = load_disease_profiles()
+    fallback_id = str(cfg.get("default_profile", "generic"))
+    for p in sorted_profiles():
+        if str(p.get("id", "")).strip() == fallback_id:
+            return p
+    return {
+        "id": "generic",
+        "fig23_layout_mode": "systems_map",
+        "fig23_require_core_node": True,
+        "fig23_core_label_template": "{disease}\n核心病理负担",
+        "fig23_disallow_nodes": ["代谢系统", "营养状态"],
+        "fig23_top_to_core": ["神经系统", "内分泌系统", "免疫系统"],
+        "fig23_core_to_bottom": ["心血管系统", "消化系统", "肾脏系统"],
+        "fig23_dual_panel": {},
+        "fig23_semantic": {},
+        "figure_specs": {},
+    }
+
+
+def query_alias_map() -> Dict[str, str]:
+    merged: Dict[str, str] = {}
+    for p in sorted_profiles():
+        aliases = p.get("query_aliases", {}) or {}
+        if isinstance(aliases, dict):
+            for k, v in aliases.items():
+                sk, sv = str(k).strip(), str(v).strip()
+                if sk and sv:
+                    merged[sk] = sv
+    return merged
+
+
+def disease_query_term(disease_name: str) -> str:
+    name = disease_name.strip()
+    alias_map = query_alias_map()
+    if name in alias_map:
+        return alias_map[name]
+    if any("\u4e00" <= ch <= "\u9fff" for ch in name):
+        return f"{name} treatment guideline"
+    return name
+
+
+def configure_output_mode(lite_output: bool = False) -> None:
+    global LITE_OUTPUT
+    LITE_OUTPUT = bool(lite_output)
+
+
+def render_disease_template(template: str, default: str = "") -> str:
+    raw = str(template).strip() or str(default).strip()
+    # Support escaped newlines from JSON config (e.g. "\\n").
+    raw = raw.replace("\\n", "\n").replace("\\t", "\t")
+    try:
+        rendered = raw.format(disease=DISEASE_NAME)
+    except Exception:
+        rendered = raw.replace("{disease}", DISEASE_NAME)
+    return normalize_disease_text(rendered)
+
+
+def render_profile_title_template(template: str) -> str:
+    return render_disease_template(template, default="图表2-3：{disease}相关系统关系图（分层布局）")
+
+
+def fig23_layout_mode(profile_id: str | None = None) -> str:
+    runtime_spec = load_figure_specs(profile_id).get("fig_2_3", {})
+    if isinstance(runtime_spec, dict):
+        mode = str(runtime_spec.get("layout_mode", "")).strip()
+        if mode:
+            return mode
+    profile = get_profile_data(profile_id)
+    mode = str(profile.get("fig23_layout_mode", "systems_map")).strip()
+    return mode or "systems_map"
+
+
+def fig23_expected_caption(profile_id: str | None = None) -> str:
+    runtime_spec = load_figure_specs(profile_id).get("fig_2_3", {})
+    if isinstance(runtime_spec, dict):
+        raw_caption = str(runtime_spec.get("caption") or runtime_spec.get("title") or "").strip()
+        if raw_caption:
+            return compose_figure_title("2-3", render_disease_template(raw_caption, default=raw_caption))
+    profile = get_profile_data(profile_id)
+    sem = profile.get("fig23_semantic", {})
+    sem_dict = sem if isinstance(sem, dict) else {}
+    template = str(sem_dict.get("expected_title_template", "图表2-3：{disease}相关系统关系图（分层布局）")).strip()
+    return render_profile_title_template(template)
+
+
+def fig23_forbidden_captions(profile_id: str | None = None) -> List[str]:
+    profile = get_profile_data(profile_id)
+    sem = profile.get("fig23_semantic", {})
+    sem_dict = sem if isinstance(sem, dict) else {}
+    templates = sem_dict.get("forbidden_title_templates", []) or []
+    out: List[str] = []
+    for t in templates:
+        s = render_profile_title_template(str(t))
+        if s:
+            out.append(s)
+    return out
+
+
+def fig23_require_core_node(profile_id: str | None = None) -> bool:
+    profile = get_profile_data(profile_id)
+    return bool(profile.get("fig23_require_core_node", False))
+
+
+def fig23_core_label(profile_id: str | None = None) -> str:
+    profile = get_profile_data(profile_id)
+    template = str(profile.get("fig23_core_label_template", "{disease}\n核心病理负担")).strip() or "{disease}\n核心病理负担"
+    return render_disease_template(template)
+
+
+def fig23_disallow_nodes(profile_id: str | None = None) -> List[str]:
+    profile = get_profile_data(profile_id)
+    out = [str(x).strip() for x in (profile.get("fig23_disallow_nodes") or []) if str(x).strip()]
+    runtime_spec = load_figure_specs(profile_id).get("fig_2_3", {})
+    if isinstance(runtime_spec, dict):
+        extra = runtime_spec.get("disallow_nodes")
+        if isinstance(extra, list):
+            for item in extra:
+                token = str(item).strip()
+                if token and token not in out:
+                    out.append(token)
+    return out
+
+
+def fig23_top_to_core_nodes(profile_id: str | None = None) -> List[str]:
+    profile = get_profile_data(profile_id)
+    return [str(x).strip() for x in (profile.get("fig23_top_to_core") or []) if str(x).strip()]
+
+
+def fig23_core_to_bottom_nodes(profile_id: str | None = None) -> List[str]:
+    profile = get_profile_data(profile_id)
+    return [str(x).strip() for x in (profile.get("fig23_core_to_bottom") or []) if str(x).strip()]
+
+
+def fig23_dual_panel_config(profile_id: str | None = None) -> Dict[str, object]:
+    runtime_spec = load_figure_specs(profile_id).get("fig_2_3", {})
+    if isinstance(runtime_spec, dict):
+        cfg = runtime_spec.get("dual_panel", runtime_spec.get("panels", {}))
+        if isinstance(cfg, dict) and cfg:
+            return cfg
+    profile = get_profile_data(profile_id)
+    cfg = profile.get("fig23_dual_panel", {})
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _fig23_anchor_point(x: float, y: float, width: float, height: float, anchor: str) -> Tuple[float, float]:
+    m = {
+        "center": (x, y),
+        "north": (x, y + height / 2.0),
+        "south": (x, y - height / 2.0),
+        "west": (x - width / 2.0, y),
+        "east": (x + width / 2.0, y),
+    }
+    return m.get(anchor, m["center"])
+
+
+def _fig23_label_role(label: str) -> str:
+    t = normalize_disease_text(str(label)).replace("\n", "").strip()
+    if not t:
+        return "other"
+    # Driver-like labels (etiology/pathophysiology upstream).
+    if any(k in t for k in ["病因", "驱动", "炎症", "免疫", "神经", "内分泌", "HPA", "回路", "微生态", "供血", "受压"]):
+        if "核心" in t and any(k in t for k in ["症状", "后果", "风险", "负担"]):
+            return "outcome"
+        return "driver"
+    # Outcome-like labels (clinical burden/downstream consequences).
+    if any(k in t for k in ["症状", "后果", "风险", "负担", "回避", "功能", "并发", "睡眠", "心血管", "消化", "行为"]):
+        return "outcome"
+    if "系统" in t:
+        return "system"
+    return "other"
+
+
+def _fig23_is_system_semantic(label: str) -> bool:
+    t = normalize_disease_text(str(label)).replace("\n", "").strip()
+    if not t:
+        return False
+    if "系统" in t:
+        return True
+    # Keep this list focused on domain labels that are routinely used as
+    # subsystem names even without an explicit "系统" suffix.
+    implicit_system_terms = [
+        "神经",
+        "免疫",
+        "内分泌",
+        "血管",
+        "肌肉骨骼",
+        "呼吸",
+        "消化",
+        "肾脏",
+        "睡眠",
+        "心理行为",
+        "上气道微生态",
+    ]
+    return any(k in t for k in implicit_system_terms)
+
+
+def validate_fig23_structural_rules(profile_id: str | None = None) -> Dict[str, object]:
+    """
+    Structural QA for fig_2_3. The checks are config-driven and run before/without image OCR:
+      1) causal direction consistency (semantic heuristic)
+      2) same-track overlap (line collisions on same vertical track)
+      3) bidirectional readability (A->B and B->A must be geometrically distinguishable)
+      4) layer consistency (same row should not mix system/non-system semantics)
+    """
+
+    out: Dict[str, object] = {
+        "layout_mode": fig23_layout_mode(profile_id),
+        "causal_direction_issues": [],
+        "same_track_overlap_issues": [],
+        "bidirectional_readability_issues": [],
+        "layer_consistency_issues": [],
+        "node_spacing_issues": [],
+    }
+    if str(out["layout_mode"]) != "dual_panel":
+        return out
+
+    panel_cfg = fig23_dual_panel_config(profile_id)
+    if not isinstance(panel_cfg, dict):
+        return out
+
+    for panel_name in ("left", "right"):
+        cfg = panel_cfg.get(panel_name)
+        if not isinstance(cfg, dict):
+            continue
+
+        panel_title = render_disease_template(str(cfg.get("title", "")).strip())
+        nodes_raw = cfg.get("nodes", [])
+        edges_raw = cfg.get("edges", [])
+
+        nodes: Dict[str, Dict[str, object]] = {}
+        if isinstance(nodes_raw, list):
+            for node in nodes_raw:
+                if not isinstance(node, dict):
+                    continue
+                node_id = str(node.get("id", "")).strip()
+                if not node_id:
+                    continue
+                x = float(node.get("x", 0.5))
+                y = float(node.get("y", 0.5))
+                w = float(node.get("width", node.get("w", 0.30)))
+                h = float(node.get("height", node.get("h", 0.12)))
+                label_tpl = str(node.get("label", node_id)).strip().replace("\\n", "\n")
+                label = render_disease_template(label_tpl, default=node_id)
+                nodes[node_id] = {
+                    "id": node_id,
+                    "label": label,
+                    "x": x,
+                    "y": y,
+                    "w": w,
+                    "h": h,
+                }
+
+        node_ids = sorted(list(nodes.keys()))
+        node_spacing_seen: set[str] = set()
+        boundary_seen: set[str] = set()
+        for node_id in node_ids:
+            node = nodes[node_id]
+            left = float(node["x"]) - float(node["w"]) / 2.0
+            right = float(node["x"]) + float(node["w"]) / 2.0
+            bottom = float(node["y"]) - float(node["h"]) / 2.0
+            top = float(node["y"]) + float(node["h"]) / 2.0
+            if left < 0.02 or right > 0.98 or bottom < 0.04 or top > 0.96:
+                issue_key = f"{panel_name}:{node_id}:boundary"
+                if issue_key not in boundary_seen:
+                    boundary_seen.add(issue_key)
+                    out["node_spacing_issues"].append(f"{panel_name}:{node_id} 过于贴近画布边界（L={left:.3f},R={right:.3f},B={bottom:.3f},T={top:.3f}）")
+        for a_idx in range(len(node_ids)):
+            for b_idx in range(a_idx + 1, len(node_ids)):
+                a = node_ids[a_idx]
+                b = node_ids[b_idx]
+                na = nodes[a]
+                nb = nodes[b]
+                ax_gap = abs(float(na["x"]) - float(nb["x"])) - (float(na["w"]) + float(nb["w"])) / 2.0
+                ay_gap = abs(float(na["y"]) - float(nb["y"])) - (float(na["h"]) + float(nb["h"])) / 2.0
+                issue_key = f"{panel_name}:{a}|{b}"
+                if issue_key in node_spacing_seen:
+                    continue
+                if ax_gap < -0.002 and ay_gap < -0.002:
+                    node_spacing_seen.add(issue_key)
+                    out["node_spacing_issues"].append(f"{panel_name}:{a} 与 {b} 节点框发生重叠")
+                    continue
+                same_row = abs(float(na["y"]) - float(nb["y"])) <= max(float(na["h"]), float(nb["h"])) * 0.35
+                same_col = abs(float(na["x"]) - float(nb["x"])) <= max(float(na["w"]), float(nb["w"])) * 0.35
+                if same_row and ax_gap < 0.03:
+                    node_spacing_seen.add(issue_key)
+                    out["node_spacing_issues"].append(f"{panel_name}:{a} 与 {b} 同层间距不足（gap={ax_gap:.3f}）")
+                    continue
+                if same_col and ay_gap < 0.04:
+                    node_spacing_seen.add(issue_key)
+                    out["node_spacing_issues"].append(f"{panel_name}:{a} 与 {b} 纵向间距不足（gap={ay_gap:.3f}）")
+
+        edges: List[Dict[str, object]] = []
+        if isinstance(edges_raw, list):
+            for idx, edge in enumerate(edges_raw):
+                if not isinstance(edge, dict):
+                    continue
+                src = str(edge.get("from", "")).strip()
+                dst = str(edge.get("to", "")).strip()
+                if src not in nodes or dst not in nodes:
+                    continue
+                from_anchor = str(edge.get("from_anchor", "center")).strip() or "center"
+                to_anchor = str(edge.get("to_anchor", "center")).strip() or "center"
+                src_node = nodes[src]
+                dst_node = nodes[dst]
+                src_pt = _fig23_anchor_point(float(src_node["x"]), float(src_node["y"]), float(src_node["w"]), float(src_node["h"]), from_anchor)
+                dst_pt = _fig23_anchor_point(float(dst_node["x"]), float(dst_node["y"]), float(dst_node["w"]), float(dst_node["h"]), to_anchor)
+
+                via_pts: List[Tuple[float, float]] = []
+                via_raw = edge.get("via", [])
+                if isinstance(via_raw, list):
+                    for p in via_raw:
+                        if isinstance(p, (list, tuple)) and len(p) >= 2:
+                            try:
+                                via_pts.append((float(p[0]), float(p[1])))
+                            except Exception:
+                                continue
+                points = [src_pt] + via_pts + [dst_pt]
+                edges.append(
+                    {
+                        "idx": idx,
+                        "src": src,
+                        "dst": dst,
+                        "from_anchor": from_anchor,
+                        "to_anchor": to_anchor,
+                        "dashed": bool(edge.get("dashed", False)),
+                        "via": via_pts,
+                        "points": points,
+                    }
+                )
+
+        # 1) Causal direction semantic check.
+        for e in edges:
+            if bool(e.get("dashed", False)):
+                continue
+            src = str(e["src"])
+            dst = str(e["dst"])
+            src_label = str(nodes[src]["label"])
+            dst_label = str(nodes[dst]["label"])
+            src_role = _fig23_label_role(src_label)
+            dst_role = _fig23_label_role(dst_label)
+            src_y = float(nodes[src]["y"])
+            dst_y = float(nodes[dst]["y"])
+
+            if src_role == "outcome" and dst_role == "driver":
+                out["causal_direction_issues"].append(
+                    f"{panel_name}:{src}->{dst} 可能因果反向（下游结果指向上游驱动）"
+                )
+            if src_role in {"driver", "system"} and dst_role == "outcome" and src_y <= (dst_y + 0.02):
+                out["causal_direction_issues"].append(
+                    f"{panel_name}:{src}->{dst} 方向可疑（驱动到后果未形成下行传导）"
+                )
+
+        # 2) Same-track overlap check.
+        vertical_segments: List[Dict[str, object]] = []
+        for e in edges:
+            pts = e.get("points", [])
+            if not isinstance(pts, list) or len(pts) < 2:
+                continue
+            for i in range(len(pts) - 1):
+                p1 = pts[i]
+                p2 = pts[i + 1]
+                if not isinstance(p1, tuple) or not isinstance(p2, tuple):
+                    continue
+                x1, y1 = float(p1[0]), float(p1[1])
+                x2, y2 = float(p2[0]), float(p2[1])
+                if abs(x1 - x2) <= 0.015:
+                    y_low = min(y1, y2)
+                    y_high = max(y1, y2)
+                    if (y_high - y_low) >= 0.08:
+                        vertical_segments.append(
+                            {
+                                "edge_idx": int(e["idx"]),
+                                "src": str(e["src"]),
+                                "dst": str(e["dst"]),
+                                "x": (x1 + x2) / 2.0,
+                                "y_low": y_low,
+                                "y_high": y_high,
+                            }
+                        )
+        same_track_seen: set[str] = set()
+        for i in range(len(vertical_segments)):
+            for j in range(i + 1, len(vertical_segments)):
+                a = vertical_segments[i]
+                b = vertical_segments[j]
+                if int(a["edge_idx"]) == int(b["edge_idx"]):
+                    continue
+                if abs(float(a["x"]) - float(b["x"])) > 0.015:
+                    continue
+                overlap_low = max(float(a["y_low"]), float(b["y_low"]))
+                overlap_high = min(float(a["y_high"]), float(b["y_high"]))
+                overlap_len = overlap_high - overlap_low
+                if overlap_len < 0.12:
+                    continue
+                pair_key = "|".join(sorted([f"{a['src']}->{a['dst']}", f"{b['src']}->{b['dst']}"]))
+                if pair_key in same_track_seen:
+                    continue
+                same_track_seen.add(pair_key)
+                out["same_track_overlap_issues"].append(
+                    f"{panel_name}:{a['src']}->{a['dst']} 与 {b['src']}->{b['dst']} 存在同轨重叠"
+                )
+
+        # 3) Bidirectional readability check.
+        by_dir: Dict[Tuple[str, str], List[Dict[str, object]]] = {}
+        for e in edges:
+            k = (str(e["src"]), str(e["dst"]))
+            by_dir.setdefault(k, []).append(e)
+        for a_idx in range(len(node_ids)):
+            for b_idx in range(a_idx + 1, len(node_ids)):
+                a = node_ids[a_idx]
+                b = node_ids[b_idx]
+                ab = by_dir.get((a, b), [])
+                ba = by_dir.get((b, a), [])
+                if not ab or not ba:
+                    continue
+                readable = False
+                for e1 in ab:
+                    for e2 in ba:
+                        via1 = e1.get("via", [])
+                        via2 = e2.get("via", [])
+                        has_detour = bool(via1) or bool(via2)
+                        anchors_same_track = (e1.get("from_anchor"), e1.get("to_anchor")) == (
+                            e2.get("to_anchor"),
+                            e2.get("from_anchor"),
+                        )
+                        if has_detour or (not anchors_same_track):
+                            readable = True
+                            break
+                    if readable:
+                        break
+                if not readable:
+                    out["bidirectional_readability_issues"].append(
+                        f"{panel_name}:{a}<->{b} 双向关系未做几何避让（可读性不足）"
+                    )
+
+        # 4) Layer consistency check (same row semantic mixing).
+        row_buckets: Dict[int, List[str]] = {}
+        for node_id, node in nodes.items():
+            y = float(node["y"])
+            # 0.08 row height bucket for "same layer" judgment.
+            bucket = int(round(y / 0.08))
+            row_buckets.setdefault(bucket, []).append(node_id)
+        for _, ids in row_buckets.items():
+            if len(ids) < 2:
+                continue
+            labels = [str(nodes[n]["label"]) for n in ids]
+            has_system = any(_fig23_is_system_semantic(lb) for lb in labels)
+            has_non_system = any((not _fig23_is_system_semantic(lb)) for lb in labels)
+            if has_system and has_non_system:
+                out["layer_consistency_issues"].append(
+                    f"{panel_name}:同层节点混合“系统”与“非系统”语义（{', '.join(ids)}）"
+                )
+
+        # Panel semantic hint checks.
+        if "后果" in panel_title:
+            rev = 0
+            for e in edges:
+                if bool(e.get("dashed", False)):
+                    continue
+                src_role = _fig23_label_role(str(nodes[str(e["src"])]["label"]))
+                dst_role = _fig23_label_role(str(nodes[str(e["dst"])]["label"]))
+                if src_role == "outcome" and dst_role in {"driver", "system"}:
+                    rev += 1
+            if rev > 0:
+                out["causal_direction_issues"].append(
+                    f"{panel_name}:标题为“后果层”但存在{rev}条后果反指驱动/系统的实线关系"
+                )
+
+    return out
+
+
+def load_figure_specs(profile_id: str | None = None) -> Dict[str, Dict[str, object]]:
+    """
+    Figure generation config, merged in this order:
+      1) profile.figure_specs
+      2) autofile/<disease>/figure_specs.json
+      3) autofile/<disease>/fig23_codex_spec.json (fig_2_3 only)
+    Later source has higher priority.
+    """
+    merged: Dict[str, Dict[str, object]] = {}
+
+    profile = get_profile_data(profile_id)
+    p_specs = profile.get("figure_specs", {})
+    if isinstance(p_specs, dict):
+        for k, v in p_specs.items():
+            sid = str(k).strip()
+            if not sid or not isinstance(v, dict):
+                continue
+            merged[sid] = dict(v)
+
+    file_path = OUT_ROOT / "figure_specs.json"
+    if file_path.exists():
+        try:
+            raw = json.loads(file_path.read_text(encoding="utf-8"))
+        except Exception:
+            raw = {}
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                sid = str(k).strip()
+                if not sid or not isinstance(v, dict):
+                    continue
+                base = merged.get(sid, {})
+                nxt = dict(base)
+                nxt.update(v)
+                merged[sid] = nxt
+
+    fig23_codex = read_fig23_codex_spec()
+    if fig23_codex:
+        base = merged.get("fig_2_3", {})
+        nxt = dict(base) if isinstance(base, dict) else {}
+        nxt.update(fig23_codex)
+        merged["fig_2_3"] = nxt
+    return merged
+
+
+def _safe_http_json(url: str, timeout: int = 10) -> dict:
+    with urlopen(url, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8", errors="ignore")
+    return json.loads(raw)
+
+
+def fetch_pubmed_evidence(disease_name: str, max_items: int = 8) -> List[Tuple[str, str, str, str, str]]:
+    """
+    Returns list of tuples:
+      (title, source_org, year, keypoint, url)
+    """
+    term = disease_query_term(disease_name)
+    queries = [
+        f'("{term}"[Title/Abstract]) AND (guideline OR consensus OR recommendation)',
+        f'("{term}"[Title/Abstract]) AND (diagnosis OR treatment)',
+    ]
+    pmids: List[str] = []
+    seen: set[str] = set()
+    try:
+        for q in queries:
+            esearch_url = (
+                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+                f"?db=pubmed&retmode=json&retmax=12&sort=relevance&mindate=2016&datetype=pdat&term={quote_plus(q)}"
+            )
+            data = _safe_http_json(esearch_url, timeout=10)
+            ids = data.get("esearchresult", {}).get("idlist", []) or []
+            for pid in ids:
+                if pid not in seen:
+                    seen.add(pid)
+                    pmids.append(pid)
+                if len(pmids) >= max_items * 2:
+                    break
+            if len(pmids) >= max_items * 2:
+                break
+    except Exception:
+        return []
+
+    if not pmids:
+        return []
+
+    summary_items: List[Tuple[str, str, str, str, str]] = []
+    try:
+        id_str = ",".join(pmids[: max_items * 2])
+        esummary_url = (
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+            f"?db=pubmed&retmode=json&id={quote_plus(id_str)}"
+        )
+        data = _safe_http_json(esummary_url, timeout=10)
+        result = data.get("result", {})
+        for pid in pmids:
+            item = result.get(pid, {})
+            if not item:
+                continue
+            title = str(item.get("title", "")).strip().rstrip(".")
+            source = str(item.get("fulljournalname", "")).strip() or str(item.get("source", "")).strip() or "PubMed"
+            pubdate = str(item.get("pubdate", "")).strip()
+            year_m = re.search(r"(19|20)\d{2}", pubdate)
+            year = year_m.group(0) if year_m else "2024"
+            if not title:
+                continue
+            keypoint = "提供诊断、治疗或随访证据，可用于人群分层与处方路径构建"
+            url = f"https://pubmed.ncbi.nlm.nih.gov/{pid}/"
+            summary_items.append((title, source, year, keypoint, url))
+            if len(summary_items) >= max_items:
+                break
+    except Exception:
+        return []
+
+    return summary_items
 
 
 def resolve_disease_name(
@@ -131,10 +960,11 @@ def configure_runtime(
     out_base: Path | None = None,
 ) -> None:
     """Configure global runtime paths so the pipeline can run for any disease."""
-    global DISEASE_NAME, REPORT_TITLE, EXCEL_PATH, TEMPLATE_PATH, OUT_ROOT, FIG_DIR, FINAL_DOCX
+    global DISEASE_NAME, REPORT_TITLE, EXCEL_PATH, TEMPLATE_PATH, OUT_ROOT, FIG_DIR, FINAL_DOCX, _ACTIVE_PROFILE_CACHE
 
     DISEASE_NAME = disease_name.strip()
-    REPORT_TITLE = f"《{DISEASE_NAME}市场分析报告》"
+    _ACTIVE_PROFILE_CACHE = None
+    REPORT_TITLE = f"《{DISEASE_NAME}疾病市场分析报告》"
     EXCEL_PATH = Path(excel_path) if excel_path is not None else Path(f"{DISEASE_NAME}第四章数据.xlsx")
     TEMPLATE_PATH = Path(template_path) if template_path is not None else Path("template.docx")
     base = Path(out_base) if out_base is not None else Path("autofile")
@@ -145,13 +975,23 @@ def configure_runtime(
 
 def is_cervical_profile() -> bool:
     """Return True when the active disease should use musculoskeletal profile."""
-    musculoskeletal_keywords = ["颈椎", "腰椎", "脊柱", "关节", "骨", "肌", "疼痛", "骨科", "椎间盘"]
-    return any(k in DISEASE_NAME for k in musculoskeletal_keywords)
+    return active_profile_id() == "cervical"
 
 
 def is_respiratory_profile() -> bool:
-    respiratory_keywords = ["咳", "痰", "呼吸", "肺", "哮喘", "支气管", "气道", "感冒", "鼻炎"]
-    return any(k in DISEASE_NAME for k in respiratory_keywords)
+    return active_profile_id() == "respiratory"
+
+
+def is_gastritis_profile() -> bool:
+    return active_profile_id() == "gastritis"
+
+
+def is_pharyngitis_profile() -> bool:
+    return active_profile_id() == "pharyngitis"
+
+
+def is_sciatica_profile() -> bool:
+    return active_profile_id() == "sciatica"
 
 
 def ensure_runtime_dirs() -> None:
@@ -313,7 +1153,38 @@ class Ch4Data:
     top_latest_name: Dict[str, str]
 
 
-def build_ch4_data(xlsx: Path) -> Ch4Data:
+CH4_CHANNELS = ["医院端", "药店端", "线上端"]
+CH4_CHANNEL_ORDER = {name: idx for idx, name in enumerate(CH4_CHANNELS)}
+CH4_CHANNEL_ALIASES = {
+    "医院端": "医院端",
+    "医院": "医院端",
+    "hospital": "医院端",
+    "hospital channel": "医院端",
+    "药店端": "药店端",
+    "药店": "药店端",
+    "零售药店": "药店端",
+    "drugstore": "药店端",
+    "pharmacy": "药店端",
+    "retail pharmacy": "药店端",
+    "线上端": "线上端",
+    "线上": "线上端",
+    "网上药店": "线上端",
+    "online": "线上端",
+    "e-commerce": "线上端",
+    "ecommerce": "线上端",
+    "电商": "线上端",
+}
+CH4_PLACEHOLDER_NAME_TERMS = ("示例", "sample", "example", "待替换", "todo")
+
+
+def normalize_ch4_channel(value: object) -> str:
+    text = str(value).strip()
+    if not text:
+        return ""
+    return CH4_CHANNEL_ALIASES.get(text.lower(), CH4_CHANNEL_ALIASES.get(text, text))
+
+
+def build_ch4_data_from_legacy_parser(xlsx: Path) -> Ch4Data:
     hosp_cat = parse_category_sheet(xlsx, "医院品类").rename(columns={"sales": "hospital"})
     drug_cat = parse_category_sheet(xlsx, "药店品类").rename(columns={"sales": "drugstore"})
     online_cat = parse_category_sheet(xlsx, "线上品类").rename(columns={"sales": "online"})
@@ -361,9 +1232,22 @@ def build_ch4_data(xlsx: Path) -> Ch4Data:
             ]
         )
 
-    h_q, h_top10, h_full = parse_top_sheet(xlsx, "医院top")
-    d_q, d_top10, d_full = parse_top_sheet(xlsx, "药店top")
-    o_q, o_top10, o_full = parse_top_sheet(xlsx, "线上top")
+    def fallback_top(sheet: str, channel_label: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        top10 = pd.DataFrame(columns=["rank", "name", "sales"])
+        full = pd.DataFrame(columns=["rank", "name"])
+        print(f"警告：{sheet}解析失败或源表为空，已标记为缺失数据。")
+        return top10, full
+
+    def safe_parse_top(sheet: str, channel_label: str) -> Tuple[str, pd.DataFrame, pd.DataFrame]:
+        try:
+            return parse_top_sheet(xlsx, sheet)
+        except Exception:
+            top10, full = fallback_top(sheet, channel_label)
+            return str(latest_q), top10, full
+
+    h_q, h_top10, h_full = safe_parse_top("医院top", "医院端")
+    d_q, d_top10, d_full = safe_parse_top("药店top", "药店端")
+    o_q, o_top10, o_full = safe_parse_top("线上top", "线上端")
     if h_q != latest_q or d_q != latest_q or o_q != latest_q:
         pass
 
@@ -393,8 +1277,11 @@ def build_ch4_data(xlsx: Path) -> Ch4Data:
                 top5 = full_df[full_df["rank"] <= 5][q].sum(skipna=True)
                 trend_records.append({"quarter": q, "channel": channel, "cr5_pct": float(top5 / row[denom_col] * 100)})
     cr5_trend = pd.DataFrame(trend_records)
-    cr5_trend["qk"] = cr5_trend["quarter"].apply(qkey)
-    cr5_trend = cr5_trend.sort_values(["qk", "channel"]).drop(columns=["qk"]).reset_index(drop=True)
+    if cr5_trend.empty:
+        cr5_trend = pd.DataFrame(columns=["quarter", "channel", "cr5_pct"])
+    else:
+        cr5_trend["qk"] = cr5_trend["quarter"].apply(qkey)
+        cr5_trend = cr5_trend.sort_values(["qk", "channel"]).drop(columns=["qk"]).reset_index(drop=True)
 
     top_latest_name = {
         "医院端": str(h_top10.iloc[0]["name"]) if not h_top10.empty else "N/A",
@@ -417,21 +1304,446 @@ def build_ch4_data(xlsx: Path) -> Ch4Data:
     )
 
 
+def write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup_if_exists(path)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def build_ch4_workbook_preview_lines(xlsx: Path, max_preview_rows: int = 4, max_preview_cols: int = 12) -> List[str]:
+    wb = load_workbook(xlsx, read_only=True, data_only=False)
+    lines = [
+        "【第四章Excel工作簿预览】",
+        f"文件：{xlsx.name}",
+    ]
+    for ws in wb.worksheets:
+        lines.append(f"- Sheet={ws.title} | max_row={ws.max_row} | max_col={ws.max_column}")
+        shown = 0
+        for ridx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+            vals = list(row[:max_preview_cols])
+            if not any(v not in (None, "") for v in vals):
+                continue
+            preview = " | ".join([str(v).strip() if v is not None else "" for v in vals])
+            lines.append(f"  row{ridx}: {preview}")
+            shown += 1
+            if shown >= max_preview_rows:
+                break
+        if shown == 0:
+            lines.append("  非空预览：空sheet或未保存到单元格")
+    return lines
+
+
+def build_ch4_codex_extract_template(xlsx: Path) -> Dict[str, object]:
+    wb = load_workbook(xlsx, read_only=True, data_only=False)
+    sheet_names = [ws.title for ws in wb.worksheets]
+    return {
+        "schema_version": "ch4_codex_extract_v1",
+        "disease": DISEASE_NAME,
+        "source_workbook": xlsx.name,
+        "available_sheets": sheet_names,
+        "latest_quarter": "",
+        "sheet_mapping": {
+            "hospital_category": {"sheet": "医院品类", "status": "待确认", "header_rows": "", "note": ""},
+            "hospital_top": {"sheet": "医院top", "status": "待确认", "header_rows": "", "note": ""},
+            "drugstore_category": {"sheet": "药店品类", "status": "待确认", "header_rows": "", "note": ""},
+            "drugstore_top": {"sheet": "药店top", "status": "待确认", "header_rows": "", "note": ""},
+            "online_category": {"sheet": "线上品类", "status": "待确认", "header_rows": "", "note": ""},
+            "online_top": {"sheet": "线上top", "status": "待确认", "header_rows": "", "note": ""},
+        },
+        "tables": {
+            "quarterly_channel": [
+                {"quarter": "2025Q3", "hospital": 0, "drugstore": 0, "online": 0}
+            ],
+            "top10_hospital": [
+                {"rank": 1, "name": "示例通用名", "sales": 0}
+            ],
+            "top10_drugstore": [],
+            "top10_online": [],
+            "cr5_latest": [
+                {"channel": "医院端", "cr5_pct": 0},
+                {"channel": "药店端", "cr5_pct": 0},
+                {"channel": "线上端", "cr5_pct": 0}
+            ],
+            "cr5_trend": [
+                {"quarter": "2025Q3", "channel": "医院端", "cr5_pct": 0}
+            ]
+        },
+        "notes": [
+            "由当前 Codex 会话读取第四章 Excel 后填充。",
+            "禁止杜撰数值；所有数字必须可回溯到工作簿单元格区域。",
+            "latest_quarter 必填，且必须等于 quarterly_channel 中最后一个季度。",
+            "quarterly_channel 必须一季度一行、季度唯一，不得重复。",
+            "top10_* 仅保留最新季度 Top10，rank 必须唯一且限定为 1-10，不得保留示例占位值。",
+            "cr5_latest/cr5_trend 的 channel 固定使用 医院端/药店端/线上端。",
+            "若某 top sheet 为空或未保存到单元格，请保留空数组，并在 sheet_mapping 与 notes 中明确说明。"
+        ]
+    }
+
+
+def build_ch4_codex_prompt(xlsx: Path) -> str:
+    preview_lines = build_ch4_workbook_preview_lines(xlsx)
+    extract_path = OUT_ROOT / "ch04_codex_extract.json"
+    template_path = OUT_ROOT / "ch04_codex_extract_template.json"
+    lines = [
+        "【第四章 Codex 数据提取任务】",
+        f"疾病名：{DISEASE_NAME}",
+        f"源文件：{xlsx.name}",
+        f"目标输出：{extract_path}",
+        f"参考模板：{template_path}",
+        "",
+        "请由当前 Codex 会话读取第四章 Excel，并生成结构化 JSON，供脚本后续画图与装配使用。",
+        "",
+        "强制要求：",
+        "1) 只允许基于工作簿中的真实数据填充，禁止推测、补造或平滑。",
+        "2) 必须先识别 sheet 对应关系与表头层级，再输出标准化结果。",
+        "3) latest_quarter 必填，且必须等于 quarterly_channel 中最后一个季度。",
+        "4) quarterly_channel 必须覆盖医院/药店/线上三端季度销售额；一季度仅一行，季度值唯一，不得重复。",
+        "5) top10_hospital / top10_drugstore / top10_online 仅保留最新季度 Top10；rank 必须唯一且限制在 1-10；若源 sheet 为空，则保留空数组并写明原因。",
+        "6) cr5_latest / cr5_trend 的 channel 固定使用“医院端 / 药店端 / 线上端”；cr5_trend 中 quarter+channel 组合不得重复。",
+        "7) 不得保留模板示例值或占位名（如“示例通用名”）。",
+        "8) 输出 JSON 必须符合模板字段，不要新增随意字段名。",
+        "",
+        "建议检查项：",
+        "- 哪一行是排名行，哪一行是季度行",
+        "- 销售额块与增长率/份额块的列边界是否分离",
+        "- 最新季度是否与季度趋势表最后一期一致",
+        "- Top10 数值是否取自最新季度列，而不是整表首列或年汇总列",
+        "- 若存在重复季度、重复 rank、重复 quarter+channel，说明提取有误，需要重做",
+        "- 若 Excel 可视界面有数据但 openpyxl 预览为空，请在 notes 说明“工作簿未保存到单元格”或“需另存后重试”",
+        "",
+        "输出完成后，再运行：",
+        f"python scripts/run_pipeline.py --disease \"{DISEASE_NAME}\"",
+        "",
+        *preview_lines,
+    ]
+    return "\n".join(lines)
+
+
+def write_ch4_codex_helper_files(xlsx: Path) -> None:
+    template = build_ch4_codex_extract_template(xlsx)
+    write_json(OUT_ROOT / "ch04_codex_extract_template.json", template)
+    write_text(OUT_ROOT / "ch04_codex_prompt.txt", build_ch4_codex_prompt(xlsx) + "\n")
+    write_text(OUT_ROOT / "ch04_workbook_preview.txt", "\n".join(build_ch4_workbook_preview_lines(xlsx)) + "\n")
+
+
+def write_ch4_codex_review_files(raw: Dict[str, object], latest_quarter: str) -> None:
+    mapping = raw.get("sheet_mapping", {})
+    notes = raw.get("notes", [])
+    map_lines = [
+        "【第四章 Sheet 映射】",
+        f"文件：{str(raw.get('source_workbook', EXCEL_PATH.name)).strip() or EXCEL_PATH.name}",
+        f"最新季度：{latest_quarter}",
+        "",
+    ]
+    if isinstance(mapping, dict) and mapping:
+        for key, value in mapping.items():
+            if isinstance(value, dict):
+                map_lines.append(
+                    f"- {key}: sheet={value.get('sheet', '')} | status={value.get('status', '')} | header_rows={value.get('header_rows', '')} | note={value.get('note', '')}"
+                )
+            else:
+                map_lines.append(f"- {key}: {value}")
+    else:
+        map_lines.append("- 未提供 sheet_mapping")
+    write_text(OUT_ROOT / "ch04_sheet_map.txt", "\n".join(map_lines) + "\n")
+
+    review_lines = [
+        "【第四章 Codex 提取审阅】",
+        f"schema_version：{raw.get('schema_version', 'N/A')}",
+        f"source_workbook：{raw.get('source_workbook', EXCEL_PATH.name)}",
+        f"latest_quarter：{latest_quarter}",
+        "",
+        "【提取备注】",
+    ]
+    if isinstance(notes, list) and notes:
+        for note in notes:
+            review_lines.append(f"- {note}")
+    else:
+        review_lines.append("- 无")
+    write_text(OUT_ROOT / "ch04_codex_review.txt", "\n".join(review_lines) + "\n")
+
+
+def _extract_table(tables: Dict[str, object], key: str, columns: List[str], allow_empty: bool = True) -> pd.DataFrame:
+    raw = tables.get(key, [])
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
+        raise ValueError(f"ch04_codex_extract.json 中的 {key} 必须为数组。")
+    if not raw:
+        if allow_empty:
+            return pd.DataFrame(columns=columns)
+        raise ValueError(f"ch04_codex_extract.json 缺少必填表：{key}。")
+    df = pd.DataFrame(raw)
+    missing = [c for c in columns if c not in df.columns]
+    if missing:
+        raise ValueError(f"ch04_codex_extract.json 中的 {key} 缺少字段：{', '.join(missing)}。")
+    return df[columns].copy()
+
+
+def build_ch4_data_from_codex_extract(extract_path: Path) -> Ch4Data:
+    raw = json.loads(extract_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("ch04_codex_extract.json 顶层必须为对象。")
+    schema_version = str(raw.get("schema_version", "")).strip()
+    if schema_version != "ch4_codex_extract_v1":
+        raise ValueError(f"schema_version 不正确：{schema_version or '空'}")
+    disease_name = str(raw.get("disease", "")).strip()
+    if disease_name != DISEASE_NAME:
+        raise ValueError(f"disease 不匹配：当前运行病种为 {DISEASE_NAME}，JSON 中为 {disease_name or '空'}")
+    source_workbook = str(raw.get("source_workbook", "")).strip()
+    if source_workbook != EXCEL_PATH.name:
+        raise ValueError(f"source_workbook 不匹配：当前 Excel 为 {EXCEL_PATH.name}，JSON 中为 {source_workbook or '空'}")
+    tables = raw.get("tables", {})
+    if not isinstance(tables, dict):
+        raise ValueError("ch04_codex_extract.json 缺少 tables 对象。")
+
+    quarterly = _extract_table(tables, "quarterly_channel", ["quarter", "hospital", "drugstore", "online"], allow_empty=False)
+    quarterly["quarter"] = quarterly["quarter"].astype(str).str.strip()
+    bad_quarters = [q for q in quarterly["quarter"].tolist() if not QUARTER_RE.match(q)]
+    if bad_quarters:
+        raise ValueError("quarterly_channel 存在非法季度值：" + ", ".join(sorted(set(bad_quarters))))
+    for col in ["hospital", "drugstore", "online"]:
+        quarterly[col] = pd.to_numeric(quarterly[col], errors="coerce").fillna(0.0)
+    dup_quarters = quarterly.loc[quarterly["quarter"].duplicated(keep=False), "quarter"].astype(str).tolist()
+    if dup_quarters:
+        raise ValueError("quarterly_channel 存在重复季度：" + ", ".join(sorted(set(dup_quarters))))
+    quarterly["qk"] = quarterly["quarter"].apply(qkey)
+    quarterly = quarterly.sort_values("qk").reset_index(drop=True)
+    quarterly["total"] = quarterly["hospital"] + quarterly["drugstore"] + quarterly["online"]
+    quarterly["year"] = quarterly["quarter"].apply(year_of_quarter)
+
+    latest_q_raw = str(raw.get("latest_quarter", "")).strip()
+    if not latest_q_raw:
+        raise ValueError("latest_quarter 不能为空。")
+    if latest_q_raw not in set(quarterly["quarter"].tolist()):
+        raise ValueError(f"latest_quarter={latest_q_raw} 未出现在 quarterly_channel 中。")
+    latest_q = str(quarterly.iloc[-1]["quarter"])
+    if latest_q_raw != latest_q:
+        raise ValueError(f"latest_quarter={latest_q_raw} 与 quarterly_channel 最后一个季度 {latest_q} 不一致。")
+    latest_row = quarterly[quarterly["quarter"] == latest_q].iloc[-1]
+
+    annual = (
+        quarterly.groupby("year", as_index=False)[["hospital", "drugstore", "online", "total"]]
+        .sum()
+        .sort_values("year")
+        .reset_index(drop=True)
+    )
+
+    latest_share = pd.DataFrame(
+        [
+            {"channel": "医院端", "sales": latest_row["hospital"], "share_pct": latest_row["hospital"] / latest_row["total"] * 100 if latest_row["total"] else np.nan},
+            {"channel": "药店端", "sales": latest_row["drugstore"], "share_pct": latest_row["drugstore"] / latest_row["total"] * 100 if latest_row["total"] else np.nan},
+            {"channel": "线上端", "sales": latest_row["online"], "share_pct": latest_row["online"] / latest_row["total"] * 100 if latest_row["total"] else np.nan},
+        ]
+    )
+
+    prev_q = f"{int(str(latest_q)[:4]) - 1}Q{str(latest_q)[-1]}"
+    prev_row = quarterly[quarterly["quarter"] == prev_q]
+    if prev_row.empty:
+        yoy_latest = pd.DataFrame(
+            [
+                {"channel": "医院端", "yoy_pct": np.nan},
+                {"channel": "药店端", "yoy_pct": np.nan},
+                {"channel": "线上端", "yoy_pct": np.nan},
+            ]
+        )
+    else:
+        p = prev_row.iloc[0]
+        yoy_latest = pd.DataFrame(
+            [
+                {"channel": "医院端", "yoy_pct": (latest_row["hospital"] - p["hospital"]) / p["hospital"] * 100 if p["hospital"] else np.nan},
+                {"channel": "药店端", "yoy_pct": (latest_row["drugstore"] - p["drugstore"]) / p["drugstore"] * 100 if p["drugstore"] else np.nan},
+                {"channel": "线上端", "yoy_pct": (latest_row["online"] - p["online"]) / p["online"] * 100 if p["online"] else np.nan},
+            ]
+        )
+
+    def _top10(key: str) -> pd.DataFrame:
+        df = _extract_table(tables, key, ["rank", "name", "sales"], allow_empty=True)
+        if df.empty:
+            return pd.DataFrame(columns=["rank", "name", "sales"])
+        df["rank"] = pd.to_numeric(df["rank"], errors="coerce")
+        df["sales"] = pd.to_numeric(df["sales"], errors="coerce")
+        df["name"] = df["name"].astype(str).str.strip()
+        df = df.dropna(subset=["rank", "sales"])
+        df = df[df["name"] != ""]
+        if df.empty:
+            return pd.DataFrame(columns=["rank", "name", "sales"])
+        bad_rank_rows = df[(df["rank"] < 1) | (df["rank"] > 10) | ((df["rank"] % 1) != 0)]
+        if not bad_rank_rows.empty:
+            raise ValueError(f"{key} 存在非法 rank，仅允许 1-10 的整数。")
+        df["rank"] = df["rank"].astype(int)
+        dup_ranks = df.loc[df["rank"].duplicated(keep=False), "rank"].astype(int).tolist()
+        if dup_ranks:
+            raise ValueError(f"{key} 存在重复 rank：" + ", ".join(str(x) for x in sorted(set(dup_ranks))))
+        dup_names = df.loc[df["name"].duplicated(keep=False), "name"].astype(str).tolist()
+        if dup_names:
+            raise ValueError(f"{key} 存在重复通用名：" + "、".join(sorted(set(dup_names))))
+        placeholder_names = [
+            name for name in df["name"].astype(str).tolist()
+            if any(token in name.lower() for token in CH4_PLACEHOLDER_NAME_TERMS)
+        ]
+        if placeholder_names:
+            raise ValueError(f"{key} 仍包含模板占位名：" + "、".join(sorted(set(placeholder_names))))
+        if len(df) > 10:
+            raise ValueError(f"{key} 超过 10 行，请仅保留最新季度 Top10。")
+        return df.sort_values("rank").reset_index(drop=True)
+
+    top_hospital = _top10("top10_hospital")
+    top_drugstore = _top10("top10_drugstore")
+    top_online = _top10("top10_online")
+
+    cr5_latest = _extract_table(tables, "cr5_latest", ["channel", "cr5_pct"], allow_empty=True)
+    if cr5_latest.empty:
+        def _cr5_from_top(df: pd.DataFrame, total_value: float) -> float:
+            if df.empty or total_value <= 0:
+                return np.nan
+            top5_sum = df[df["rank"] <= 5]["sales"].sum(skipna=True)
+            return float(top5_sum / total_value * 100)
+
+        cr5_latest = pd.DataFrame(
+            [
+                {"channel": "医院端", "cr5_pct": _cr5_from_top(top_hospital, float(latest_row["hospital"]))},
+                {"channel": "药店端", "cr5_pct": _cr5_from_top(top_drugstore, float(latest_row["drugstore"]))},
+                {"channel": "线上端", "cr5_pct": _cr5_from_top(top_online, float(latest_row["online"]))},
+            ]
+        )
+    else:
+        cr5_latest["channel"] = cr5_latest["channel"].apply(normalize_ch4_channel)
+        cr5_latest["cr5_pct"] = pd.to_numeric(cr5_latest["cr5_pct"], errors="coerce")
+        bad_channels = [c for c in cr5_latest["channel"].astype(str).tolist() if c not in CH4_CHANNEL_ORDER]
+        if bad_channels:
+            raise ValueError("cr5_latest 存在非法 channel：" + "、".join(sorted(set(bad_channels))))
+        dup_channels = cr5_latest.loc[cr5_latest["channel"].duplicated(keep=False), "channel"].astype(str).tolist()
+        if dup_channels:
+            raise ValueError("cr5_latest 存在重复 channel：" + "、".join(sorted(set(dup_channels))))
+        cr5_latest_map = dict(zip(cr5_latest["channel"], cr5_latest["cr5_pct"]))
+        cr5_latest = pd.DataFrame(
+            [{"channel": channel, "cr5_pct": cr5_latest_map.get(channel, np.nan)} for channel in CH4_CHANNELS]
+        )
+
+    cr5_trend = _extract_table(tables, "cr5_trend", ["quarter", "channel", "cr5_pct"], allow_empty=True)
+    if cr5_trend.empty:
+        cr5_trend = pd.DataFrame(columns=["quarter", "channel", "cr5_pct"])
+    else:
+        cr5_trend["quarter"] = cr5_trend["quarter"].astype(str).str.strip()
+        cr5_trend["channel"] = cr5_trend["channel"].apply(normalize_ch4_channel)
+        cr5_trend["cr5_pct"] = pd.to_numeric(cr5_trend["cr5_pct"], errors="coerce")
+        cr5_trend = cr5_trend.dropna(subset=["quarter"]).copy()
+        cr5_trend = cr5_trend[cr5_trend["quarter"].apply(lambda x: bool(QUARTER_RE.match(x)))]
+        if not cr5_trend.empty:
+            bad_trend_channels = [c for c in cr5_trend["channel"].astype(str).tolist() if c not in CH4_CHANNEL_ORDER]
+            if bad_trend_channels:
+                raise ValueError("cr5_trend 存在非法 channel：" + "、".join(sorted(set(bad_trend_channels))))
+            dup_pairs = cr5_trend.loc[
+                cr5_trend.duplicated(subset=["quarter", "channel"], keep=False),
+                ["quarter", "channel"],
+            ]
+            if not dup_pairs.empty:
+                dup_text = [f"{row.quarter}/{row.channel}" for row in dup_pairs.drop_duplicates().itertuples(index=False)]
+                raise ValueError("cr5_trend 存在重复 quarter+channel：" + "、".join(dup_text))
+            cr5_trend["qk"] = cr5_trend["quarter"].apply(qkey)
+            cr5_trend["channel_order"] = cr5_trend["channel"].map(CH4_CHANNEL_ORDER)
+            cr5_trend = cr5_trend.sort_values(["qk", "channel_order"]).drop(columns=["qk", "channel_order"]).reset_index(drop=True)
+
+    def _cr5_from_top(df: pd.DataFrame, total_value: float) -> float:
+        if df.empty or total_value <= 0:
+            return np.nan
+        top5_sum = df[df["rank"] <= 5]["sales"].sum(skipna=True)
+        return float(top5_sum / total_value * 100)
+
+    for channel, top_df, total_value in [
+        ("医院端", top_hospital, float(latest_row["hospital"])),
+        ("药店端", top_drugstore, float(latest_row["drugstore"])),
+        ("线上端", top_online, float(latest_row["online"])),
+    ]:
+        expected_cr5 = _cr5_from_top(top_df, total_value)
+        provided_row = cr5_latest[cr5_latest["channel"] == channel]
+        provided_cr5 = float(provided_row.iloc[0]["cr5_pct"]) if not provided_row.empty and pd.notna(provided_row.iloc[0]["cr5_pct"]) else np.nan
+        if pd.notna(expected_cr5) and pd.notna(provided_cr5) and abs(provided_cr5 - expected_cr5) > 0.5:
+            raise ValueError(
+                f"cr5_latest 中 {channel} 与 Top5/季度总额计算结果不一致：填报={provided_cr5:.2f}，计算={expected_cr5:.2f}"
+            )
+
+    if not cr5_trend.empty:
+        latest_trend = cr5_trend[cr5_trend["quarter"] == latest_q]
+        latest_trend_map = dict(zip(latest_trend["channel"], latest_trend["cr5_pct"]))
+        for channel in CH4_CHANNELS:
+            trend_value = latest_trend_map.get(channel, np.nan)
+            latest_value = cr5_latest.loc[cr5_latest["channel"] == channel, "cr5_pct"].iloc[0]
+            if pd.notna(trend_value) and pd.notna(latest_value) and abs(float(trend_value) - float(latest_value)) > 0.5:
+                raise ValueError(
+                    f"cr5_trend 中最新季度 {latest_q} 的 {channel} 与 cr5_latest 不一致：趋势={float(trend_value):.2f}，最新值={float(latest_value):.2f}"
+                )
+
+    top_latest_name = {
+        "医院端": str(top_hospital.iloc[0]["name"]) if not top_hospital.empty else "N/A",
+        "药店端": str(top_drugstore.iloc[0]["name"]) if not top_drugstore.empty else "N/A",
+        "线上端": str(top_online.iloc[0]["name"]) if not top_online.empty else "N/A",
+    }
+
+    write_ch4_codex_review_files(raw, latest_q)
+
+    return Ch4Data(
+        quarterly=quarterly,
+        annual=annual,
+        latest_quarter=str(latest_q),
+        latest_share=latest_share,
+        yoy_latest=yoy_latest,
+        top_hospital=top_hospital,
+        top_drugstore=top_drugstore,
+        top_online=top_online,
+        cr5_latest=cr5_latest,
+        cr5_trend=cr5_trend,
+        top_latest_name=top_latest_name,
+    )
+
+
+def build_ch4_data(xlsx: Path) -> Ch4Data:
+    write_ch4_codex_helper_files(xlsx)
+    extract_path = OUT_ROOT / "ch04_codex_extract.json"
+    if not extract_path.exists():
+        raise RuntimeError(
+            "未检测到第四章结构化提取结果 ch04_codex_extract.json。"
+            "请先由当前 Codex 会话读取第四章 Excel，参考 ch04_codex_prompt.txt 与 ch04_codex_extract_template.json 生成该文件，再重新执行。"
+        )
+    try:
+        return build_ch4_data_from_codex_extract(extract_path)
+    except Exception as exc:
+        raise RuntimeError(
+            "第四章结构化提取结果无效。请先检查 ch04_codex_extract.json、ch04_sheet_map.txt 与 ch04_codex_review.txt 后再重试。"
+        ) from exc
+
+
 def write_ch4_profile_files(ch4: Ch4Data) -> None:
+    missing_top_channels = []
+    if ch4.top_hospital.empty:
+        missing_top_channels.append("医院端")
+    if ch4.top_drugstore.empty:
+        missing_top_channels.append("药店端")
+    if ch4.top_online.empty:
+        missing_top_channels.append("线上端")
+    competition_support = "可直接支持（top通用名、CR5）"
+    top_support = "可直接支持（最新季度Top10）"
+    if missing_top_channels:
+        channels = "、".join(missing_top_channels)
+        competition_support = f"部分支持（{channels}TOP源表为空，相关Top/CR5仅对有数据渠道输出）"
+        top_support = f"部分支持（{channels}未提供最新季度Top表）"
+
     profile_lines = [
         "【第四章Excel剖面】",
         f"文件：{EXCEL_PATH.name}",
-        "Sheet清单：医院品类、医院top、药店品类、药店top、线上品类、线上top",
+        "第四章标准化来源：ch04_codex_extract.json（由 Codex 读取 Excel 后生成）",
+        "Sheet映射：详见 ch04_sheet_map.txt",
         f"季度范围：{ch4.quarterly['quarter'].iloc[0]} - {ch4.quarterly['quarter'].iloc[-1]}",
         f"记录条数（渠道季度）：{len(ch4.quarterly)}",
         "粒度：季度，金额单位：万元，口径：米内网终端销售额",
-        "缺失与异常：个别top表季度单元存在空值，已按可用季度值解析；分析使用同口径季度与年度聚合表。",
+        "缺失与异常：详见 ch04_codex_review.txt；脚本仅消费结构化提取结果，不再直接猜测 Excel top 表结构。",
         "",
         "【可支撑分析】",
         "1) 规模趋势：可直接支持（季度+年度）",
         "2) 渠道结构：可直接支持（医院/药店/线上）",
-        "3) 竞争格局：可直接支持（top通用名、CR5）",
-        "4) 重点品种：可直接支持（最新季度Top10）",
+        f"3) 竞争格局：{competition_support}",
+        f"4) 重点品种：{top_support}",
         "5) 区域分析：原始表未提供地区维度，采用渠道与品种结构替代说明。",
     ]
     write_text(OUT_ROOT / "ch04_excel_profile.txt", "\n".join(profile_lines))
@@ -466,6 +1778,10 @@ def write_ch4_profile_files(ch4: Ch4Data) -> None:
 
 
 def build_evidence_and_refs() -> Tuple[str, str]:
+    def to_ref(idx: int, title: str, org: str, year: str, url: str, dtype: str = "EB/OL") -> str:
+        y = year if re.search(r"(19|20)\d{2}", str(year)) else "2024"
+        return f"[{idx}] {org}. {title}[{dtype}]. {y}. {url}"
+
     if is_cervical_profile():
         evidence = [
             ("E01", "Musculoskeletal conditions", "World Health Organization", "2022", "肌肉骨骼疾病负担及残疾影响", "https://www.who.int/news-room/fact-sheets/detail/musculoskeletal-conditions"),
@@ -483,6 +1799,42 @@ def build_evidence_and_refs() -> Tuple[str, str]:
             ("E13", "颈肩痛诊疗与慢性疼痛管理共识", "中国疼痛医学相关学会", "2022", "疼痛分层、功能结局与长期管理", "https://guide.medlive.cn/guideline/28605"),
             ("E14", "中医骨伤科颈椎病诊疗指南", "中国中医药相关学会", "2021", "中医辨证分型与针灸推拿干预建议", "https://guide.medlive.cn/guideline/26067"),
             ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
+        ]
+    elif is_sciatica_profile():
+        evidence = [
+            ("E01", "Musculoskeletal conditions", "World Health Organization", "2022", "肌肉骨骼疾病负担持续上升，腰背痛与神经根痛管理需求显著", "https://www.who.int/news-room/fact-sheets/detail/musculoskeletal-conditions"),
+            ("E02", "Low back pain and sciatica in over 16s: assessment and management", "National Institute for Health and Care Excellence", "2020", "坐骨神经痛诊断、影像时机、保守治疗与转诊路径建议", "https://www.nice.org.uk/guidance/ng59"),
+            ("E03", "Lumbar Disc Herniation with Radiculopathy", "North American Spine Society", "2012", "腰椎间盘突出伴神经根病的评估、保守治疗、介入与手术证据", "https://www.spine.org/ResearchClinicalCare/QualityImprovement/ClinicalGuidelines"),
+            ("E04", "2025年版国家基本医疗保险、生育保险和工伤保险药品目录和商业健康保险创新药品目录", "国家医疗保障局/人力资源社会保障部", "2025", "支付范围与目录动态调整影响镇痛、辅助治疗和院外可及性", "https://www.nhsa.gov.cn/art/2025/12/7/art_14_18972.html"),
+            ("E05", "2025年国家医疗质量安全改进目标", "国家卫生健康委员会", "2025", "强化医疗质量目标管理，推动骨科、康复和疼痛相关质量改进", "https://www.nhc.gov.cn/yzygj/c100068/202503/ad63fb8ce9e24013a68db52049ecc524.shtml"),
+            ("E06", "Herniated Disc", "American Association of Neurological Surgeons", "2024", "多数神经根痛可先行保守治疗，但持续症状和神经缺损需升级评估", "https://www.aans.org/patients/conditions-treatments/herniated-disc/"),
+            ("E07", "Cauda Equina Syndrome", "American Association of Neurological Surgeons", "2024", "马尾综合征红旗征包括尿潴留、鞍区麻木和进行性肌力下降", "https://www.aans.org/patients/conditions-treatments/cauda-equina-syndrome/"),
+            ("E08", "2025年年末人口数及其构成", "国家统计局", "2026", "老龄化、城镇就业与职业负荷结构变化影响腰腿痛与康复需求", "https://www.stats.gov.cn/zt_18555/zthd/lhfw/2026lhzt/2026hgjj/202602/t20260228_1962667.html"),
+            ("E09", "药品说明书修订公告专栏", "中国食品药品检定研究院/国家药监局", "2025", "说明书修订与风险提示持续影响镇痛药和辅助治疗药物的合规使用", "https://www.cpi.ac.cn/tggg/ypsmsxdgg/"),
+            ("E10", "2024年我国卫生健康事业发展统计公报新闻解读稿", "国家卫生健康委员会", "2025", "门诊、住院和基层服务量变化为骨科疼痛与康复资源配置提供背景", "https://www.nhc.gov.cn/guihuaxxs/c100132/202512/9db8db5488a748c4b1e1068a4a8c4455.shtml"),
+            ("E11", "专家解读《中国人群身体活动指南（2021）》", "国家卫生健康委员会", "2021", "身体活动与分层运动处方是慢性腰腿痛长期管理的重要基础", "https://www.nhc.gov.cn/wjw/ftsp/202112/44e8325ad5934eb0b42b2987e3148315.shtml"),
+            ("E12", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院、药店、线上三端季度销售额与Top品种比较基础", f"{EXCEL_PATH.name}"),
+            ("E13", "How effective are physiotherapy interventions in treating people with sciatica? A systematic review and meta-analysis", "PubMed", "2023", "物理治疗是首线保守治疗的重要组成，但疗效受方案与人群分层影响", "https://pubmed.ncbi.nlm.nih.gov/36580149/"),
+            ("E14", "Acupuncture vs Sham Acupuncture for Chronic Sciatica From Herniated Disk: A Randomized Clinical Trial", "PubMed", "2024", "针刺对慢性坐骨神经痛疼痛和功能改善具有循证支持", "https://pubmed.ncbi.nlm.nih.gov/39401008/"),
+            ("E15", "法规文件", "国家药品监督管理局", "2025", "药品全生命周期监管、说明书合规和院外传播边界持续收紧", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
+        ]
+    elif is_gastritis_profile():
+        evidence = [
+            ("E01", "中国慢性胃炎诊治指南（2022年，上海）", "中华消化杂志", "2023", "慢性胃炎定义、分型、诊断与治疗路径", "https://rs.yiigle.com/cmaid/1473570"),
+            ("E02", "第五次全国幽门螺杆菌感染处理共识报告", "中华消化杂志", "2022", "Hp检测方法、根除方案与复查窗口", "https://rs.yiigle.com/cmaid/1413767"),
+            ("E03", "Kyoto global consensus report on gastritis", "Gut", "2015", "胃炎病因学、分类与胃癌风险链路", "https://gut.bmj.com/content/64/9/1353"),
+            ("E04", "Maastricht VI/Florence consensus report", "Gut", "2022", "幽门螺杆菌感染管理国际推荐", "https://gut.bmj.com/content/71/9/1724"),
+            ("E05", "ACG Guideline on Treatment of Helicobacter pylori Infection", "American Journal of Gastroenterology", "2024", "Hp根除治疗推荐与耐药背景下方案选择", "https://journals.lww.com/ajg/abstract/2024/10000/acg_clinical_guideline__treatment_of_helicobacter.13.aspx"),
+            ("E06", "Global Cancer Observatory: Stomach cancer fact sheet", "IARC/WHO", "2024", "胃癌疾病负担与流行病学对比", "https://gco.iarc.who.int/media/globocan/factsheets/cancers/7-stomach-fact-sheet.pdf"),
+            ("E07", "Diagnosis and treatment protocol for chronic gastritis (China)", "中国临床相关指南解读", "2022", "慢性胃炎临床分层与治疗终点", "https://pmc.ncbi.nlm.nih.gov/articles/PMC9602100/"),
+            ("E08", "国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "人口结构与就医需求变化", "https://www.stats.gov.cn/"),
+            ("E09", "国家基本医疗保险药品目录（2024年）", "国家医疗保障局", "2024", "支付规则影响抑酸/胃黏膜保护等用药可及性", "https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html"),
+            ("E10", "国家医保局2024年药品目录调整新闻发布会", "国家医疗保障局", "2024", "目录准入价值导向与支付口径", "https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html"),
+            ("E11", "中国卫生健康统计年鉴及国家统计数据库", "国家卫生健康委员会/国家统计局", "2024", "门急诊及消化系统疾病服务供给变化", "https://www.stats.gov.cn/"),
+            ("E12", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
+            ("E13", "Management of epithelial precancerous conditions and lesions in the stomach", "MAPS II Guideline", "2019", "胃癌前病变随访分层与内镜病理管理", "https://pubmed.ncbi.nlm.nih.gov/30841008/"),
+            ("E14", "Functional dyspepsia and overlap management evidence", "Rome Foundation/临床综述", "2023", "功能性消化不良与胃炎相关症状管理边界", "https://www.theromefoundation.org"),
+            ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "药品全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
         ]
     elif is_respiratory_profile():
         evidence = [
@@ -503,23 +1855,32 @@ def build_evidence_and_refs() -> Tuple[str, str]:
             ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
         ]
     else:
-        evidence = [
-            ("E01", f"{DISEASE_NAME}相关疾病负担与防控建议", "World Health Organization", "2024", "疾病负担、风险因素与干预重点", "https://www.who.int/"),
-            ("E02", f"{DISEASE_NAME}诊疗规范（国家/行业）", "国家卫生健康委员会/相关学会", "2021", "分层诊疗、病情评估与规范用药路径", "https://www.nhc.gov.cn/"),
-            ("E03", f"{DISEASE_NAME}临床诊疗专家共识", "中华医学会相关分会", "2022", "诊疗流程、复评窗口与风险分层建议", "https://guide.medlive.cn/"),
-            ("E04", "国家基本医疗保险、工伤保险和生育保险药品目录（2024年）", "国家医疗保障局", "2024", "支付规则影响可及性与处方结构", "https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html"),
-            ("E05", "国家医保局2024年药品目录调整新闻发布会", "国家医疗保障局", "2024", "目录调整原则与临床价值导向", "https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html"),
-            ("E06", f"{DISEASE_NAME}国际诊疗指南摘要", "国际专业组织", "2023", "循证分级、诊断标准与风险管理建议", "https://www.who.int/"),
-            ("E07", "药品安全沟通与用药风险提示", "U.S. Food and Drug Administration", "2024", "高风险人群、禁忌与安全边界提示", "https://www.fda.gov/drugs/drug-safety-and-availability"),
-            ("E08", "国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "人口结构与就医需求变化", "https://www.stats.gov.cn/"),
-            ("E09", "药品说明书修订公告汇总", "中国食品药品检定研究院", "2024", "说明书标签与警示信息更新", "https://www.cpi.ac.cn/tggg/ypsmsxdgg/"),
-            ("E10", "中国卫生健康统计年鉴及国家统计数据库", "国家卫生健康委员会/国家统计局", "2024", "长期趋势对终端需求的结构性影响", "https://www.stats.gov.cn/"),
-            ("E11", f"{DISEASE_NAME}多学科管理专家共识", "国内专科联盟/相关学会", "2022", "并发风险管理与长期随访建议", "https://guide.medlive.cn/"),
-            ("E12", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
-            ("E13", f"{DISEASE_NAME}患者长期管理建议", "相关学会/专业组织", "2023", "依从管理、复评节奏与转诊策略", "https://guide.medlive.cn/"),
-            ("E14", f"{DISEASE_NAME}中西医协同诊疗建议", "中医药相关学会", "2022", "辨证分型与现代终点对齐路径", "https://guide.medlive.cn/"),
-            ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
+        dynamic = fetch_pubmed_evidence(DISEASE_NAME, max_items=8)
+        evidence = []
+        eid = 1
+        for title, org, year, keypoint, url in dynamic:
+            evidence.append((f"E{eid:02d}", title, org, year, keypoint, url))
+            eid += 1
+            if eid > 8:
+                break
+        fallback_dynamic = [
+            (f"{DISEASE_NAME}诊疗指南与共识检索（PubMed）", "PubMed", "2024", "用于补充疾病特异性指南/共识证据", f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(disease_query_term(DISEASE_NAME) + ' guideline consensus')}"),
+            (f"{DISEASE_NAME}系统综述检索（PubMed）", "PubMed", "2024", "用于补充治疗终点与人群分层证据", f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(disease_query_term(DISEASE_NAME) + ' systematic review treatment')}"),
         ]
+        while len(evidence) < 8:
+            title, org, year, keypoint, url = fallback_dynamic[(len(evidence) - len(dynamic)) % len(fallback_dynamic)]
+            evidence.append((f"E{len(evidence)+1:02d}", title, org, year, keypoint, url))
+        evidence.extend(
+            [
+                ("E09", "国家基本医疗保险、工伤保险和生育保险药品目录（2024年）", "国家医疗保障局", "2024", "支付规则影响可及性与处方结构", "https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html"),
+                ("E10", "国家医保局2024年药品目录调整新闻发布会", "国家医疗保障局", "2024", "目录调整原则与临床价值导向", "https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html"),
+                ("E11", "国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "人口结构与就医需求变化", "https://www.stats.gov.cn/"),
+                ("E12", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
+                ("E13", "中国卫生健康统计年鉴及国家统计数据库", "国家卫生健康委员会/国家统计局", "2024", "长期趋势对终端需求的结构性影响", "https://www.stats.gov.cn/"),
+                ("E14", "药品说明书修订公告汇总", "中国食品药品检定研究院", "2024", "说明书标签与警示信息更新", "https://www.cpi.ac.cn/tggg/ypsmsxdgg/"),
+                ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
+            ]
+        )
 
     evidence_lines = ["证据ID|标题|机构/作者|年份|要点|可追溯来源"]
     for e in evidence:
@@ -543,6 +1904,24 @@ def build_evidence_and_refs() -> Tuple[str, str]:
             "[14] 中国中医药相关学会. 中医骨伤科颈椎病诊疗指南[S/OL]. 2021. https://guide.medlive.cn/guideline/26067",
             "[15] 国家药品监督管理局. 法规文件索引与政策发布[EB/OL]. 2024. https://www.nmpa.gov.cn/xxgk/fgwj/",
         ]
+    elif is_gastritis_profile():
+        refs = [
+            "[1] 中华消化杂志. 中国慢性胃炎诊治指南（2022年，上海）[S/OL]. 2023. https://rs.yiigle.com/cmaid/1473570",
+            "[2] 中华消化杂志. 第五次全国幽门螺杆菌感染处理共识报告[S/OL]. 2022. https://rs.yiigle.com/cmaid/1413767",
+            "[3] Gut. Kyoto global consensus report on gastritis[EB/OL]. 2015. https://gut.bmj.com/content/64/9/1353",
+            "[4] Gut. Maastricht VI/Florence consensus report[EB/OL]. 2022. https://gut.bmj.com/content/71/9/1724",
+            "[5] American Journal of Gastroenterology. ACG clinical guideline: treatment of Helicobacter pylori infection[EB/OL]. 2024. https://journals.lww.com/ajg/abstract/2024/10000/acg_clinical_guideline__treatment_of_helicobacter.13.aspx",
+            "[6] IARC/WHO. Global Cancer Observatory: Stomach cancer fact sheet[EB/OL]. 2024. https://gco.iarc.who.int/media/globocan/factsheets/cancers/7-stomach-fact-sheet.pdf",
+            "[7] PMC. Diagnosis and treatment protocol for chronic gastritis in China[EB/OL]. 2022. https://pmc.ncbi.nlm.nih.gov/articles/PMC9602100/",
+            "[8] 国家统计局. 国家统计数据发布平台（人口与社会）[DB/OL]. 2024. https://www.stats.gov.cn/",
+            "[9] 国家医疗保障局. 国家基本医疗保险、工伤保险和生育保险药品目录（2024年）[S/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html",
+            "[10] 国家医疗保障局. 2024年药品目录调整新闻发布会[EB/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html",
+            "[11] 国家卫生健康委员会/国家统计局. 中国卫生健康统计年鉴及国家统计数据库[DB/OL]. 2024. https://www.stats.gov.cn/",
+            f"[12] 米内网/项目数据. {EXCEL_PATH.name}（医院/药店/线上口径）[DB]. 2025.",
+            "[13] PubMed. Management of epithelial precancerous conditions and lesions in the stomach (MAPS II)[EB/OL]. 2019. https://pubmed.ncbi.nlm.nih.gov/30841008/",
+            "[14] Rome Foundation. Functional dyspepsia and overlap management evidence[EB/OL]. 2023. https://www.theromefoundation.org/",
+            "[15] 国家药品监督管理局. 法规文件索引与政策发布[EB/OL]. 2024. https://www.nmpa.gov.cn/xxgk/fgwj/",
+        ]
     elif is_respiratory_profile():
         refs = [
             "[1] World Health Organization. Pneumonia (Fact sheet)[EB/OL]. 2024. https://www.who.int/en/news-room/fact-sheets/detail/pneumonia",
@@ -562,23 +1941,11 @@ def build_evidence_and_refs() -> Tuple[str, str]:
             "[15] 国家药品监督管理局. 法规文件索引与政策发布[EB/OL]. 2024. https://www.nmpa.gov.cn/xxgk/fgwj/",
         ]
     else:
-        refs = [
-            f"[1] World Health Organization. {DISEASE_NAME}相关疾病负担与防控建议[EB/OL]. 2024. https://www.who.int/",
-            f"[2] 国家卫生健康委员会/相关学会. {DISEASE_NAME}诊疗规范[S/OL]. 2021. https://www.nhc.gov.cn/",
-            f"[3] 中华医学会相关分会. {DISEASE_NAME}临床诊疗专家共识[S/OL]. 2022. https://guide.medlive.cn/",
-            "[4] 国家医疗保障局. 国家基本医疗保险、工伤保险和生育保险药品目录（2024年）[S/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html",
-            "[5] 国家医疗保障局. 2024年药品目录调整新闻发布会[EB/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html",
-            f"[6] 国际专业组织. {DISEASE_NAME}国际诊疗指南摘要[EB/OL]. 2023. https://www.who.int/",
-            "[7] U.S. Food and Drug Administration. Drug Safety Communication[EB/OL]. 2024. https://www.fda.gov/drugs/drug-safety-and-availability",
-            "[8] 国家统计局. 国家统计数据发布平台（人口与社会）[DB/OL]. 2024. https://www.stats.gov.cn/",
-            "[9] 中国食品药品检定研究院. 药品说明书修订公告汇总[EB/OL]. 2024. https://www.cpi.ac.cn/tggg/ypsmsxdgg/",
-            "[10] 国家卫生健康委员会/国家统计局. 中国卫生健康统计年鉴及国家统计数据库[DB/OL]. 2024. https://www.stats.gov.cn/",
-            f"[11] 国内专科联盟/相关学会. {DISEASE_NAME}多学科管理专家共识[S/OL]. 2022. https://guide.medlive.cn/",
-            f"[12] 米内网/项目数据. {EXCEL_PATH.name}（医院/药店/线上口径）[DB]. 2025.",
-            f"[13] 相关学会/专业组织. {DISEASE_NAME}患者长期管理建议[S/OL]. 2023. https://guide.medlive.cn/",
-            f"[14] 中医药相关学会. {DISEASE_NAME}中西医协同诊疗建议[S/OL]. 2022. https://guide.medlive.cn/",
-            "[15] 国家药品监督管理局. 法规文件索引与政策发布[EB/OL]. 2024. https://www.nmpa.gov.cn/xxgk/fgwj/",
-        ]
+        refs = []
+        for i, e in enumerate(evidence, start=1):
+            _, title, org, year, _, url = e
+            dtype = "DB" if (EXCEL_PATH.name in url) else "EB/OL"
+            refs.append(to_ref(i, title, org, year, url, dtype=dtype))
 
     return "\n".join(evidence_lines), "\n".join(refs)
 
@@ -621,6 +1988,87 @@ def build_block_specs() -> List[BlockSpec]:
             BlockSpec("7.1", 7, "7.1 未来市场预测（负担/市场规模/治疗方案演进）", 1760, ["需求预测", "规模外推", "渠道重构", "证据升级", "方案演进"], "E08|E13|E14", "fig_7_1"),
             BlockSpec("7.2", 7, "7.2 战略建议（市场部/战略部：定位、证据、准入、渠道、生命周期）", 1760, ["定位策略", "证据策略", "准入策略", "渠道策略", "生命周期管理"], "E08|E10|E15", "fig_7_2"),
             BlockSpec("7.3", 7, "7.3 本章小结", 1080, ["前瞻判断", "执行闭环", "组织协同", "风险应对"], "E10|E14|E15", ""),
+        ]
+    if is_sciatica_profile():
+        return [
+            BlockSpec("1.1", 1, "1.1 疾病定义与病因分层（椎间盘突出/椎管狭窄/梨状肌相关）", 1250, ["定义边界", "病因分层", "神经根定位", "病程阶段", "高危场景"], "E01|E02|E03", "fig_1_1"),
+            BlockSpec("1.2", 1, "1.2 发病机制与病理生理（神经根受压-炎症放大-疼痛敏化）", 1250, ["神经根受压", "炎症放大", "疼痛敏化", "功能受限", "风险触发因素"], "E01|E03|E13", "fig_1_2|fig_1_3"),
+            BlockSpec("1.3", 1, "1.3 本章小结", 900, ["诊断框架", "病因分层", "风险识别", "康复主线"], "E01|E02|E13", "fig_1_4"),
+            BlockSpec("2.1", 2, "2.1 与神经、肌肉骨骼及睡眠心理系统的关联", 1500, ["神经功能", "肌肉代偿", "步态改变", "睡眠受损", "系统交互"], "E02|E03|E11", "fig_2_1"),
+            BlockSpec("2.2", 2, "2.2 常见并发问题与风险管理", 1500, ["慢性神经病理性疼痛", "运动功能下降", "睡眠障碍", "情绪负担", "红旗征"], "E03|E07|E13", "fig_2_2|fig_2_3"),
+            BlockSpec("2.3", 2, "2.3 本章小结", 1000, ["风险前移", "分层复评", "功能管理", "长期控制"], "E03|E11|E12", ""),
+            BlockSpec("3.1", 3, "3.1 临床诊断标准与检查路径", 1600, ["病史采集", "神经体征", "红旗征识别", "影像时机", "功能量表"], "E02|E03|E07", "fig_3_1"),
+            BlockSpec("3.2", 3, "3.2 西医治疗体系（药物、介入、手术、康复）", 1600, ["起始治疗", "镇痛策略", "介入治疗", "手术适应证", "安全监测"], "E03|E06|E13", "fig_3_2"),
+            BlockSpec("3.3", 3, "3.3 中医辨证路径与中西协同管理", 1400, ["辨证分型", "针灸应用", "中成药", "运动康复", "疗效终点"], "E11|E13|E14", "fig_3_3"),
+            BlockSpec("3.4", 3, "3.4 本章小结", 950, ["分层诊疗", "复评管理", "证据闭环", "长期获益"], "E13|E14|E15", ""),
+            BlockSpec("4.1", 4, "4.1 治疗药物市场概况", 900, ["渠道规模", "季度趋势", "结构占比", "增长驱动"], "E09|E10|E12", "fig_4_1|fig_4_2"),
+            BlockSpec("4.2", 4, "4.2 主要治疗药物分析", 900, ["头部通用名", "渠道差异", "品类结构", "增速分化"], "E08|E10|E12", "fig_4_3|fig_4_4"),
+            BlockSpec("4.3", 4, "4.3 市场格局与竞争态势", 900, ["集中度", "核心品种", "竞争壁垒", "替代路径"], "E08|E12|E15", "fig_4_5|fig_4_8"),
+            BlockSpec("4.4", 4, "4.4 本章小结", 800, ["口径一致性", "数据复算", "主要结论", "风险提示"], "E09|E10|E12", "fig_4_6|fig_4_7"),
+            BlockSpec("5.1", 5, "5.1 患者群体结构与画像（年龄/职业负荷/疼痛分层/用药偏好）", 1600, ["年龄结构", "职业负荷", "就诊场景", "疼痛分层", "需求差异"], "E04|E08|E13", "fig_5_1"),
+            BlockSpec("5.2", 5, "5.2 医生处方偏好与诊疗习惯（骨科/疼痛科/康复科差异）", 1600, ["处方偏好", "科室差异", "证据偏好", "未满足需求", "转诊路径"], "E03|E05|E08", "fig_5_2|fig_5_4"),
+            BlockSpec("5.3", 5, "5.3 患者依从性与长期管理（运动处方/复评窗口/全周期管理）", 1400, ["依从瓶颈", "运动处方", "复评窗口", "随访机制", "长期控制"], "E04|E11|E12", "fig_5_3"),
+            BlockSpec("5.4", 5, "5.4 本章小结", 900, ["患者中心", "路径协同", "连续管理", "服务化能力"], "E04|E05|E15", ""),
+            BlockSpec("6.1", 6, "6.1 疾病政策环境（全球与中国）", 1700, ["指南更新", "医保支付", "质量管理", "分级诊疗", "监管协同"], "E04|E05|E15", "fig_6_1"),
+            BlockSpec("6.2", 6, "6.2 监管趋势对品类与渠道的影响", 1700, ["说明书边界", "支付规则", "合规传播", "院内准入", "院外规范"], "E04|E09|E15", "fig_6_2"),
+            BlockSpec("6.3", 6, "6.3 本章小结", 1000, ["政策边界", "支付约束", "合规经营", "长期确定性"], "E04|E05|E15", ""),
+            BlockSpec("7.1", 7, "7.1 市场预测（方法-假设-情景）", 1700, ["需求预测", "规模外推", "渠道重构", "治疗演进", "敏感性"], "E08|E10|E12", "fig_7_1"),
+            BlockSpec("7.2", 7, "7.2 战略建议（产品/证据/准入/渠道/生命周期）", 1700, ["产品定位", "证据策略", "准入策略", "渠道组合", "生命周期管理"], "E04|E10|E15", "fig_7_2"),
+            BlockSpec("7.3", 7, "7.3 本章小结", 1000, ["增长判断", "资源配置", "执行优先级", "风险对冲"], "E10|E12|E15", ""),
+        ]
+    if is_gastritis_profile():
+        return [
+            BlockSpec("1.1", 1, "1.1 疾病定义与病因分层（Hp相关/非Hp相关）", 1250, ["定义边界", "病因结构", "病理分型", "高危人群", "临床分层"], "E01|E02|E03", "fig_1_1"),
+            BlockSpec("1.2", 1, "1.2 发病机制与病理演进（炎症-萎缩-肠化）", 1250, ["炎症链路", "萎缩进展", "肠化风险", "异型增生", "进展触发因素"], "E01|E03|E13", "fig_1_2|fig_1_3"),
+            BlockSpec("1.3", 1, "1.3 本章小结", 900, ["病因分层", "风险链路", "证据等级", "诊疗边界"], "E01|E02|E13", "fig_1_4"),
+            BlockSpec("2.1", 2, "2.1 与免疫、代谢及消化动力系统的关联", 1500, ["免疫炎症", "代谢影响", "胃酸分泌", "胃动力", "系统交互"], "E02|E03|E11", "fig_2_1"),
+            BlockSpec("2.2", 2, "2.2 并发症与癌前病变风险管理", 1500, ["糜烂风险", "溃疡风险", "贫血风险", "癌前病变", "随访窗口"], "E03|E11|E13", "fig_2_2|fig_2_3"),
+            BlockSpec("2.3", 2, "2.3 本章小结", 1000, ["分层随访", "风险前移", "并发管理", "可及性约束"], "E03|E11|E12", ""),
+            BlockSpec("3.1", 3, "3.1 临床诊断标准与检查路径（内镜+病理+Hp检测）", 1600, ["症状筛查", "Hp检测", "内镜检查", "病理分级", "复查路径"], "E01|E02|E13", "fig_3_1"),
+            BlockSpec("3.2", 3, "3.2 西医治疗体系（抑酸/黏膜保护/Hp根除/促动力）", 1600, ["抑酸方案", "黏膜保护", "根除治疗", "促动力/消化酶", "不良反应监测"], "E02|E04|E05", "fig_3_2"),
+            BlockSpec("3.3", 3, "3.3 中医辨证路径与中西协同治疗", 1400, ["辨证分型", "治则治法", "中成药应用", "中西协同", "疗效终点"], "E01|E14|E15", "fig_3_3"),
+            BlockSpec("3.4", 3, "3.4 本章小结", 950, ["分层诊疗", "随访管理", "安全边界", "证据闭环"], "E05|E13|E15", ""),
+            BlockSpec("4.1", 4, "4.1 市场口径定义与三端规模趋势", 900, ["口径定义", "品类范围", "季度趋势", "结构占比"], "E09|E10|E12", "fig_4_1|fig_4_2"),
+            BlockSpec("4.2", 4, "4.2 核心治疗品类与重点通用名", 900, ["品类结构", "头部通用名", "渠道差异", "价格带"], "E08|E10|E12", "fig_4_3|fig_4_4"),
+            BlockSpec("4.3", 4, "4.3 竞争格局与玩家地图（CR5/TOP10）", 900, ["CR5", "TOP10覆盖", "玩家分层", "竞争壁垒"], "E08|E12|E15", "fig_4_5|fig_4_8"),
+            BlockSpec("4.4", 4, "4.4 本章小结", 800, ["口径一致性", "复算路径", "主要结论", "风险提示"], "E09|E10|E12", "fig_4_6|fig_4_7"),
+            BlockSpec("5.1", 5, "5.1 患者画像与诊疗分层（年龄/病因/病理风险）", 1600, ["年龄结构", "病因分层", "病理风险", "就医路径", "用药偏好"], "E01|E08|E13", "fig_5_1"),
+            BlockSpec("5.2", 5, "5.2 处方路径与未满足临床需求", 1600, ["科室处方差异", "治疗目标差异", "依从挑战", "未满足需求", "证据缺口"], "E02|E05|E11", "fig_5_2|fig_5_4"),
+            BlockSpec("5.3", 5, "5.3 长期管理与复查依从（根除后与癌前病变）", 1400, ["根除后管理", "复查窗口", "依从性因素", "院内外协同", "长期风险"], "E04|E05|E13", "fig_5_3"),
+            BlockSpec("5.4", 5, "5.4 本章小结", 900, ["人群分层", "处方策略", "复查路径", "证据升级"], "E04|E05|E15", ""),
+            BlockSpec("6.1", 6, "6.1 政策环境（全球与中国）", 1700, ["指南更新", "医保支付", "审评监管", "质量标准", "合规传播"], "E09|E10|E11", "fig_6_1"),
+            BlockSpec("6.2", 6, "6.2 监管趋势对品类与渠道的影响", 1700, ["审评审批", "药品说明书", "支付规则", "院内准入", "互联网规范"], "E09|E10|E15", "fig_6_2"),
+            BlockSpec("6.3", 6, "6.3 本章小结", 1000, ["政策边界", "准入路径", "渠道约束", "合规风险"], "E09|E10|E15", ""),
+            BlockSpec("7.1", 7, "7.1 市场预测（方法-假设-情景）", 1700, ["模型方法", "基准假设", "三情景预测", "敏感性", "风险变量"], "E08|E10|E12", "fig_7_1"),
+            BlockSpec("7.2", 7, "7.2 战略建议（产品/证据/准入/渠道）", 1700, ["产品定位", "证据策略", "准入策略", "渠道组合", "生命周期管理"], "E09|E10|E15", "fig_7_2"),
+            BlockSpec("7.3", 7, "7.3 本章小结", 1000, ["增长判断", "资源配置", "执行优先级", "风险对冲"], "E10|E12|E15", ""),
+        ]
+    if is_pharyngitis_profile():
+        return [
+            BlockSpec("1.1", 1, "1.1 疾病定义与病因分层（感染/过敏/刺激暴露）", 1250, ["定义边界", "病因结构", "病程分层", "高危人群", "临床分层"], "E01|E02|E03", "fig_1_1"),
+            BlockSpec("1.2", 1, "1.2 发病机制与病理生理（局部炎症-神经敏化）", 1250, ["炎症反应", "神经敏化", "黏膜屏障", "反流刺激", "微生态失衡"], "E01|E03|E13", "fig_1_2|fig_1_3"),
+            BlockSpec("1.3", 1, "1.3 本章小结", 900, ["病因分层", "风险链路", "证据边界", "诊疗锚点"], "E01|E02|E13", "fig_1_4"),
+            BlockSpec("2.1", 2, "2.1 与免疫、神经及上气道微生态的关联", 1500, ["免疫炎症", "神经反射", "微生态波动", "环境暴露", "系统交互"], "E02|E03|E11", "fig_2_1"),
+            BlockSpec("2.2", 2, "2.2 常见并发问题与风险管理", 1500, ["咽喉反流重叠", "睡眠受损", "声音疲劳", "焦虑负担", "复诊负担"], "E03|E11|E13", "fig_2_2|fig_2_3"),
+            BlockSpec("2.3", 2, "2.3 本章小结", 1000, ["风险前移", "分层复评", "依从管理", "长期控制"], "E03|E11|E12", ""),
+            BlockSpec("3.1", 3, "3.1 临床诊断标准与检查路径（耳鼻喉专科）", 1600, ["病史采集", "喉镜评估", "红旗征识别", "鉴别诊断", "复评路径"], "E02|E03|E11", "fig_3_1"),
+            BlockSpec("3.2", 3, "3.2 西医治疗体系（病因控制+症状缓解）", 1600, ["病因控制", "黏膜保护", "抗炎治疗", "合并反流管理", "安全监测"], "E03|E06|E13", "fig_3_2"),
+            BlockSpec("3.3", 3, "3.3 中医辨证路径与中西协同管理", 1400, ["辨证分型", "治则治法", "中成药应用", "中西协同", "疗效终点"], "E14|E13|E11", "fig_3_3"),
+            BlockSpec("3.4", 3, "3.4 本章小结", 950, ["分层诊疗", "复评管理", "安全边界", "证据闭环"], "E13|E14|E15", ""),
+            BlockSpec("4.1", 4, "4.1 治疗药物市场概况", 900, ["渠道规模", "季度趋势", "结构占比", "增长驱动"], "E09|E10|E12", "fig_4_1|fig_4_2"),
+            BlockSpec("4.2", 4, "4.2 主要治疗药物分析", 900, ["头部通用名", "渠道差异", "品类结构", "价格带"], "E08|E12|E15", "fig_4_3|fig_4_4"),
+            BlockSpec("4.3", 4, "4.3 市场格局与竞争态势", 900, ["集中度", "玩家分层", "竞争壁垒", "切入路径"], "E08|E12|E15", "fig_4_5|fig_4_8"),
+            BlockSpec("4.4", 4, "4.4 本章小结", 800, ["口径一致性", "复算路径", "主要结论", "风险提示"], "E09|E10|E12", "fig_4_6|fig_4_7"),
+            BlockSpec("5.1", 5, "5.1 患者画像与就诊分层（年龄/职业暴露/症状谱）", 1600, ["年龄结构", "职业暴露", "症状谱", "就诊路径", "用药偏好"], "E04|E08|E13", "fig_5_1"),
+            BlockSpec("5.2", 5, "5.2 处方路径与未满足临床需求", 1600, ["处方偏好", "科室差异", "复发管理", "未满足需求", "证据缺口"], "E03|E05|E11", "fig_5_2|fig_5_4"),
+            BlockSpec("5.3", 5, "5.3 长期管理与依从性挑战", 1400, ["依从障碍", "环境干预", "复评节点", "院内外协同", "长期风险"], "E04|E05|E13", "fig_5_3"),
+            BlockSpec("5.4", 5, "5.4 本章小结", 900, ["人群分层", "处方策略", "长期管理", "证据升级"], "E04|E05|E15", ""),
+            BlockSpec("6.1", 6, "6.1 政策环境（全球与中国）", 1700, ["指南更新", "医保支付", "审评监管", "质量标准", "合规传播"], "E09|E10|E11", "fig_6_1"),
+            BlockSpec("6.2", 6, "6.2 监管趋势对品类与渠道的影响", 1700, ["审评审批", "说明书边界", "支付规则", "院内准入", "互联网规范"], "E09|E10|E15", "fig_6_2"),
+            BlockSpec("6.3", 6, "6.3 本章小结", 1000, ["政策边界", "准入路径", "渠道约束", "合规风险"], "E09|E10|E15", ""),
+            BlockSpec("7.1", 7, "7.1 市场预测（方法-假设-情景）", 1700, ["模型方法", "基准假设", "三情景预测", "敏感性", "风险变量"], "E08|E10|E12", "fig_7_1"),
+            BlockSpec("7.2", 7, "7.2 战略建议（产品/证据/准入/渠道）", 1700, ["产品定位", "证据策略", "准入策略", "渠道组合", "生命周期管理"], "E09|E10|E15", "fig_7_2"),
+            BlockSpec("7.3", 7, "7.3 本章小结", 1000, ["增长判断", "资源配置", "执行优先级", "风险对冲"], "E10|E12|E15", ""),
         ]
     if not is_respiratory_profile():
         return [
@@ -677,817 +2125,6 @@ def build_block_specs() -> List[BlockSpec]:
     ]
 
 
-EVIDENCE_SNIPPETS = {
-    "E01": "WHO《Pneumonia》事实页面指出儿童呼吸道感染负担存在季节性与区域差异",
-    "E02": "《儿童社区获得性肺炎诊疗规范（2019年版）》强调分级诊疗和规范用药路径",
-    "E03": "国家卫健委儿童腺病毒肺炎诊疗规范强调重症风险识别和动态评估",
-    "E04": "国家医保局2024年医保目录调整结果体现支付规则对品种结构的影响",
-    "E05": "医保目录调整新闻发布会材料强调保障能力与临床价值并重",
-    "E06": "EMA关于可待因儿童止咳使用限制强调年龄与安全风险边界",
-    "E07": "FDA药物安全沟通文件强调儿童使用可待因和曲马多存在明确风险边界",
-    "E08": "国家统计口径与公开零售数据共同显示院外终端在药品可及性中的作用上升",
-    "E09": "国家药监体系持续发布说明书修订信息，强化儿童用药标签与警示",
-    "E10": "国家统计局人口数据提示儿童人群结构与需求区域分布在变化",
-    "E11": "《儿童肺炎链球菌疾病诊疗和预防专家共识》提供了临床分层要点",
-    "E12": "米内网终端口径可支持医院、药店、线上三端同口径比较",
-    "E13": "《中国儿童慢性咳嗽诊断与治疗指南（2021）》给出分层诊疗建议",
-    "E14": "《儿童咳嗽中西医结合诊治专家共识》提出中西医协同路径",
-    "E15": "国家药监法规与公开政策文件持续强化全生命周期合规要求",
-}
-
-EID_TO_REF = {
-    "E01": 1,
-    "E02": 2,
-    "E03": 3,
-    "E04": 4,
-    "E05": 5,
-    "E06": 6,
-    "E07": 7,
-    "E08": 8,
-    "E09": 9,
-    "E10": 10,
-    "E11": 11,
-    "E12": 12,
-    "E13": 13,
-    "E14": 14,
-    "E15": 15,
-}
-
-CLINICAL_ANCHORS = {
-    "1.1": [
-        "在儿童咳嗽临床定义上，通常按病程分为急性、迁延性和慢性三类，分层目的是区分自限性过程与需要进一步评估的人群[13]。",
-        "对于止咳祛痰场景，分类不应只看症状强度，还应结合年龄、基础病史、既往反复发作史和夜间症状模式，以避免过度或不足治疗[2]。",
-    ],
-    "1.2": [
-        "发病机制层面，儿童气道黏膜炎症可导致分泌增加与纤毛清除效率下降，形成“黏液潴留—刺激性咳嗽—睡眠受损”的循环链路[1]。",
-        "机制评估应同步关注感染、过敏与环境暴露三类触发因素，并在复评节点判断主导因素是否变化，以指导方案调整[3]。",
-    ],
-    "1.3": [
-        "本章结论应回到三件事：定义边界是否清晰、分层标准是否可执行、复评节点是否可追踪；三者缺一都会降低后续治疗一致性[13]。",
-        "对儿童止咳祛痰主题，优先级应是安全边界优先于短期症状压制，尤其要避免跨年龄段套用同一处置策略[6][13]。",
-    ],
-    "2.1": [
-        "呼吸系统与免疫系统联动最为显著，感染后炎症反应会改变气道反应性并影响后续用药响应，需在复评时动态更新风险分层[11]。",
-        "儿童人群还常见消化系统与呼吸症状的相互影响，如胃食管反流或上气道刺激可叠加咳嗽负担，需避免单系统解释[13]。",
-    ],
-    "2.2": [
-        "并发与合并问题中，需优先识别高风险信号：持续高热、呼吸急促、低氧表现、精神状态改变或脱水征象，一旦出现应尽快转入上级评估[2]。",
-        "对反复发作患儿，建议记录既往用药反应和不良事件，以区分病程波动与方案不匹配，减少无效换药和重复就诊[5]。",
-    ],
-    "2.3": [
-        "第二章的核心不是增加检查项目，而是把系统联动信息转化为可执行的随访策略，例如48-72小时复评与1周节点复核[3][11]。",
-        "当并发风险、家长执行能力和复诊可及性同时纳入同一评估表时，临床路径稳定性会明显提升[13]。",
-    ],
-    "3.1": [
-        "诊断环节建议采用“病史—体征—必要检查—分层决策”四步法，检查项目应以临床指征驱动，避免无必要检查堆叠[2]。",
-        "临床红旗征应单列管理，包括进行性呼吸困难、发绀、持续高热不退、意识改变等，出现任一项需提升处置等级[3]。",
-    ],
-    "3.2": [
-        "治疗上应坚持病因治疗与症状管理并行，祛痰目标是改善气道清除与夜间症状负担，而不是单纯压制咳嗽反射[13]。",
-        "儿童用药需严格遵循说明书年龄限制与禁忌信息，尤其是中枢性镇咳相关成分应执行更严格的安全边界和监测要求[6][9]。",
-    ],
-    "3.3": [
-        "中医辨证常见风寒、风热、痰热等路径，应用时应与现代分层评估协同，明确适用阶段和观察终点[14]。",
-        "中西医结合的关键在于“证候一致+安全可控+终点可评估”，避免仅按经验叠加方案导致依从性下降[11][14]。",
-    ],
-    "3.4": [
-        "第三章收束时应明确两条底线：第一，任何调整必须有复评证据；第二，儿童年龄限制与禁忌信息必须前置核对[6][9]。",
-        "若红旗征、复评指标和不良反应记录三项不能闭环，诊疗路径看似完整但临床可用性会显著下降[2][3]。",
-    ],
-}
-
-OPENING_TEMPLATES = [
-    "围绕“{topic}”这一问题，{evidence}，因此本节不能只做概念描述，而要明确可执行的评价口径{cite}。",
-    "在{disease}场景下，{evidence}，这意味着讨论“{topic}”时必须同时回答谁来做、何时做、如何复盘{cite}。",
-    "从近年政策与临床实践看，{evidence}，所以“{topic}”的分析边界应覆盖临床端与经营端两套指标{cite}。",
-    "结合公开证据可见，{evidence}，本节把“{topic}”拆解为机制、指标和动作三个层面展开{cite}。",
-    "在跨渠道管理中，{evidence}，因此“{topic}”不宜停留在经验判断，需要定义监测周期与阈值{cite}。",
-]
-
-MECHANISM_TEMPLATES = [
-    "从执行层看，“{topic}”需要拆解为可量化的周度动作，避免只给方向不给阈值。",
-    "“{topic}”的关键在于把同一口径贯穿策略、运营和复盘，否则同比变化难以解释。",
-    "如果“{topic}”只按单渠道优化，通常会在跨渠道迁移时出现效率损耗和预算漂移。",
-    "“{topic}”应同步记录输入指标与结果指标，才能区分策略失效与执行偏差。",
-    "围绕“{topic}”建立季度复盘节奏，可减少一次性动作导致的阶段性波动误判。",
-]
-
-CLINICAL_TOPIC_DETAILS = {
-    "定义边界": "建议按病程（<3周、3-8周、>8周）与症状负担双轴分层，并区分干咳/湿咳与昼夜节律。",
-    "分型标准": "分型至少覆盖诱因、痰液性状、伴随喘鸣与发热程度，避免把不同病程混入同一处置路径。",
-    "年龄分层": "婴幼儿与学龄儿童在气道解剖和药物代谢上差异明显，年龄分层直接决定可选药物范围。",
-    "中西医术语映射": "中医证候与现代症状终点应建立双向映射，确保证候描述可落到复评指标。",
-    "适应症场景": "应区分急性感染后咳嗽、慢性咳嗽和过敏相关咳嗽，不同场景的用药边界差异明显。",
-    "炎症反应": "需同步判断感染性炎症与过敏性炎症主导因素，避免仅凭单次体征判断治疗方向。",
-    "分泌物黏稠度": "痰液黏稠度与纤毛清除能力相关，黏稠改善慢常提示复评节点设置不足。",
-    "气道反应性": "反复刺激可导致气道高反应状态，复发患儿应把触发因素记录纳入病历模板。",
-    "病程分期": "病程分期要与复评窗口绑定，初发期、进展期和恢复期的监测指标不应完全一致。",
-    "风险触发因素": "被动吸烟、过敏原暴露、合并感染和用药依从差均可触发病情波动，应在首诊即记录。",
-    "认知框架": "统一认知框架应覆盖病因、分层、复评、风险四部分，保证跨医生沟通一致。",
-    "分层管理": "分层管理要明确低风险居家管理和中高风险复诊节点，减少无效回诊与漏诊。",
-    "证据导向": "建议优先引用指南条款、共识建议和监管要求，减少经验化语言比例。",
-    "跨渠道协同": "院内诊疗与院外执行应共享同一复评指标，避免处方意图在执行端被稀释。",
-    "呼吸-免疫联动": "感染后免疫反应可改变气道敏感性，需把炎症变化与症状轨迹一并观察。",
-    "消化吸收影响": "反流或吞咽刺激可放大夜间咳嗽，应在病史采集中加入饮食与体位信息。",
-    "神经调节": "咳嗽反射阈值变化会影响症状强度，评估时要关注夜间发作和诱发因素。",
-    "内分泌节律": "昼夜节律与睡眠质量会影响咳嗽波动，复评建议固定在同一时间窗比较。",
-    "系统交互": "单系统解释常导致过度简化，联合评估可提高病程判断与处置稳定性。",
-    "并发感染": "识别并发感染时应重点看高热持续、呼吸频率和氧饱和度，而非仅看主诉。",
-    "睡眠受损": "夜间症状造成的睡眠中断会反向加重日间咳嗽，应单列睡眠负担指标。",
-    "反复咳嗽": "反复发作患儿应复盘既往方案响应和停药时点，识别诱因而非反复换药。",
-    "家长焦虑": "家长焦虑会影响给药依从与复诊节奏，宣教内容需与医生处置要点一致。",
-    "复诊负担": "复诊频次和可及性决定疗程完成度，建议在首诊给出明确复评触发条件。",
-    "系统管理": "系统管理应整合病史、体征、处置和随访记录，保证数据可追溯。",
-    "风险前移": "把红旗征筛查前置到首诊可显著降低后续延迟处置风险。",
-    "连续干预": "连续干预强调同一指标跨节点追踪，避免每次复诊重新定义目标。",
-    "依从提升": "依从管理需同时覆盖给药频次、疗程完整性和不良反应反馈。",
-    "分诊评估": "分诊要先排除危急信号，再决定是否进入标准化评估路径。",
-    "病因筛查": "病因筛查应先看感染与过敏线索，再考虑影像或实验室检查扩展。",
-    "红旗征识别": "红旗征包括进行性呼吸困难、低氧、意识改变、脱水等，任一项出现均需升级处置。",
-    "检查路径": "检查路径应按临床指征递进，避免一次性堆叠检查导致解释困难。",
-    "评估量表": "量表使用要与复评频率绑定，确保同一量表在不同节点可比。",
-    "起始治疗": "起始治疗优先保证安全边界，尤其是年龄限制和禁忌信息核对。",
-    "联合策略": "联合策略应有明确触发条件和停用标准，避免经验性叠加。",
-    "剂型选择": "剂型选择需考虑年龄、吞咽能力和家庭执行便利性，减少执行偏差。",
-    "安全监测": "安全监测要覆盖不良反应发生时间、严重度和处置结果三项核心字段。",
-    "疗程调整": "疗程调整应基于复评结果和症状轨迹，不应以单次主诉直接改方。",
-    "辨证分型": "辨证分型需对应可观察终点，避免证候描述与疗效评估脱节。",
-    "治则治法": "治则治法应明确适用阶段和禁忌场景，减少跨阶段套用。",
-    "中成药应用": "中成药应用需核对年龄适应证、说明书警示及联合用药风险。",
-    "中西协同": "中西协同的重点是终点一致和安全边界一致，而非简单并用。",
-    "证据等级": "证据等级应区分指南推荐、专家共识和经验建议，避免同权表述。",
-    "规范路径": "规范路径需把首诊评估、复评节点和转诊条件写成清单化规则。",
-    "证据整合": "证据整合应按“指南-共识-监管”顺序组织，保证优先级明确。",
-    "风险平衡": "风险平衡强调疗效与安全并重，任何强化治疗都需对应监测计划。",
-    "全周期管理": "全周期管理要求从首诊到随访使用同一关键指标，支持连续评估。",
-}
-
-CLINICAL_FRAME_TEMPLATES = [
-    "针对“{topic}”，{evidence}{cite}。{detail}在“{topic}”首轮复评中，建议将“{metric_name}”作为核心指标（定义：{metric_def}），并在{review_window}内复测。若“{topic}”环节出现“{risk}”，应立即执行：{action}。",
-    "在“{topic}”评估中，{evidence}{cite}。{detail}临床上可用“{metric_name}”作为“{topic}”调整触发指标（{metric_def}），复评窗口建议设为{review_window}。一旦“{topic}”处置出现“{risk}”，优先动作应为：{action}。",
-    "围绕“{topic}”的处置，{evidence}{cite}。{detail}建议把“{metric_name}”写入“{topic}”病历模板并固定在{review_window}复核（{metric_def}）。对“{topic}”场景下的“{risk}”，需执行的标准动作是：{action}。",
-    "从诊疗一致性看，“{topic}”不能只做经验判断，{evidence}{cite}。{detail}应以“{metric_name}”作为“{topic}”核心监测项（{metric_def}），在{review_window}完成同口径复评；若“{topic}”路径发生“{risk}”，应{action}。",
-]
-
-CLINICAL_REVIEW_WINDOWS = ["48小时", "72小时", "3-5天", "1周"]
-
-DEFAULT_TOPIC_DETAIL_TEMPLATES = [
-    "围绕“{topic}”，应明确诊断边界、复评节点和风险处置动作，避免仅停留在概念描述。",
-    "对“{topic}”场景，建议同步定义基线指标、复评窗口和升级处置阈值，保证可执行性。",
-    "“{topic}”的落地应把证据依据、触发条件和责任分工写入标准化流程，减少经验偏差。",
-    "在“{topic}”管理中，应坚持同口径记录与跨节点复核，避免路径漂移。",
-    "针对“{topic}”，建议建立症状、功能和安全三维度监测，以支持动态调整。",
-]
-
-METRIC_LIBRARY = [
-    ("疗程完成率", "在28天观察窗内，实际完成用药天数/计划用药天数"),
-    ("有效复诊率", "首诊后14天内完成复评且有处方或医嘱调整记录"),
-    ("首诊分层准确率", "首诊分层结果与复评分层一致的病例占比"),
-    ("无效换药率", "7天内更换方案且未记录明确临床指征的处方占比"),
-    ("依从达标率", "按医嘱完成给药频次且中断不超过2天的病例占比"),
-    ("不良反应上报及时率", "发生事件后24小时内完成标准上报的比例"),
-    ("渠道转化率", "触达后7天内形成有效购买或复诊行为的占比"),
-    ("复购间隔中位数", "同一患者两次购买或续方之间的中位天数"),
-    ("教育触达完成率", "目标患者群体中完成标准化宣教内容的比例"),
-    ("证据采纳率", "处方或推广内容中引用最新指南/共识要点的比例"),
-]
-
-ACTION_LIBRARY = [
-    "按月度节奏复盘指标漂移，并在次月处方策略会中完成闭环决议",
-    "将首诊和复评模板统一到同一字段字典，减少跨科室口径偏差",
-    "在高风险人群先做小范围验证，再按季度滚动扩展覆盖范围",
-    "把安全事件、换药原因和随访结果纳入同一台账，支持联动分析",
-    "将医院端和院外端的关键动作拆分成可追踪任务并设置责任人",
-    "建立患者教育标准包，确保医生端表述与终端传播保持一致",
-]
-
-RISK_LIBRARY = [
-    "首诊分层与复评标准不一致",
-    "跨渠道口径不统一导致决策滞后",
-    "患者端信息噪声干扰治疗执行",
-    "安全事件闭环不完整造成风险累积",
-    "复诊提醒缺失导致疗程中断",
-    "终端促销与医学证据表达脱节",
-]
-
-CLINICAL_RISKS = [
-    "红旗征识别不及时导致处置延迟",
-    "说明书年龄限制与处方执行不一致",
-    "病因评估不足引发经验性重复换药",
-    "复评节点缺失导致病程判断偏差",
-    "不良反应记录不完整影响安全决策",
-    "家长执行偏差导致疗程中断",
-]
-
-CLINICAL_METRICS = [
-    ("夜间咳嗽评分", "按0-4级记录夜间症状并在72小时复评变化"),
-    ("体温恢复时间", "从起始治疗到体温稳定<37.5°C的小时数"),
-    ("喘鸣缓解率", "出现喘鸣患儿中48小时内明显缓解的比例"),
-    ("SpO2稳定率", "复评时指脉氧持续≥95%的患儿占比"),
-    ("痰液性状改善率", "痰液由黏稠转为易咳出状态的比例"),
-    ("不良反应发生率", "治疗期间记录到不良反应的病例占比"),
-]
-
-CLINICAL_ACTIONS = [
-    "首诊即记录病程、体征和危险信号，复诊按同一模板复核",
-    "对高风险患儿设置48小时随访节点，必要时上转评估",
-    "基于复评证据调整治疗方案，避免经验性频繁换药",
-    "将说明书年龄限制与禁忌信息前置到处方审核环节",
-    "把夜间症状与家长执行情况纳入复评要点，减少疗程中断",
-]
-
-CONTEXT_SENTENCES = [
-    "以第4章米内网数据为基线，最新季度三端结构差异已足以说明“{topic}”策略必须分渠道配置。",
-    "从第4章聚合表可见，渠道份额和同比增速并不同步，这对“{topic}”的执行顺序提出了约束。",
-    "第4章数据显示医院端仍是规模锚点，但院外端正在承担更多长期管理任务，“{topic}”需同步覆盖院内外。",
-    "结合第4章CR5结果，头部稳定并不代表竞争结束，“{topic}”仍存在细分场景切入空间。",
-    "将本节动作与第4章季度数据联动，可把“{topic}”判断从经验口径转为可复核口径。",
-]
-
-GENERIC_EVIDENCE_SNIPPETS = {
-    "E01": "WHO与多边机构持续发布疾病负担与防治建议，为通用管理框架提供基线",
-    "E02": "国内权威诊疗规范强调分层评估、风险识别与复评闭环",
-    "E03": "专科共识建议按病程与严重度配置差异化处置路径",
-    "E04": "医保目录与支付规则调整持续影响治疗可及性与终端结构",
-    "E05": "国家医疗质量改进目标强调诊疗流程标准化与结果可追踪",
-    "E06": "国际指南数据库提供循证分级与风险管理建议",
-    "E07": "监管机构的安全沟通强调高风险人群与禁忌边界",
-    "E08": "国家统计与人口结构变化会改变长期疾病管理需求",
-    "E09": "说明书与标签修订强化了适应证、禁忌和监测要求",
-    "E10": "卫生统计与服务供给数据支持中长期趋势判断",
-    "E11": "专科联盟共识提供诊疗分层和并发风险控制要点",
-    "E12": "米内网终端口径可支持医院、药店、线上三端同口径比较",
-    "E13": "多学科协同管理证据强调长期随访和依从管理价值",
-    "E14": "中西医协同路径强调辨证分型与量化终点对齐",
-    "E15": "国家药监法规与公开政策文件持续强化全生命周期合规要求",
-}
-
-GENERIC_CLINICAL_ANCHORS: Dict[str, List[str]] = {}
-
-GENERIC_TOPIC_DETAILS = {
-    "定义边界": "建议按病程、严重度和并发风险三维度定义处置边界，避免将不同场景混入同一路径。",
-    "分型标准": "分型应同时覆盖临床表现、关键指标与风险信号，保证复评可比性。",
-    "发病机制": "机制描述应服务于可执行处置，重点回答触发因素、进展链路和可干预节点。",
-    "病程分层": "病程分层应绑定复评窗口和触发阈值，避免经验性扩药或过度治疗。",
-    "风险分层": "风险分层需明确升级处置条件，并将红旗征识别前置到首诊环节。",
-    "复评管理": "复评要保持同口径指标，至少覆盖症状、功能和安全三项维度。",
-}
-
-GENERIC_CLINICAL_REVIEW_WINDOWS = ["1周", "2周", "4周", "3个月"]
-
-GENERIC_CLINICAL_METRICS = [
-    ("主要症状改善率", "复评时主要症状较基线下降达到预设阈值的患者占比"),
-    ("功能恢复率", "关键功能指标达到阶段目标的患者占比"),
-    ("疗程完成率", "在计划观察窗内完成既定治疗周期的患者占比"),
-    ("复评达标率", "按预设窗口完成复评并记录完整关键指标的比例"),
-    ("不良事件发生率", "治疗周期内记录到不良事件的患者占比"),
-    ("依从达标率", "按医嘱执行关键动作且中断不超过阈值的患者占比"),
-]
-
-GENERIC_CLINICAL_ACTIONS = [
-    "首诊即记录基线指标与风险分层，复评按同一模板复核",
-    "对高风险人群设置更短复评窗口，必要时升级处置等级",
-    "将安全边界与禁忌信息前置到处置审核环节",
-    "基于复评结果动态调整方案，避免经验性频繁换药",
-    "把跨部门关键动作拆解为可追踪任务并设置责任人",
-]
-
-GENERIC_CLINICAL_RISKS = [
-    "红旗征识别不及时导致处置延迟",
-    "分层标准与复评口径不一致",
-    "病因评估不足引发经验性重复调整",
-    "复评节点缺失导致病程判断偏差",
-    "不良事件记录不完整影响安全决策",
-    "患者执行偏差导致疗程中断",
-]
-
-CERVICAL_EVIDENCE_SNIPPETS = {
-    "E01": "WHO肌肉骨骼疾病事实页提示颈椎相关功能障碍负担持续上升",
-    "E02": "《颈椎病康复诊疗专家共识》强调分层康复和功能复评节点",
-    "E03": "骨科相关共识提出保守治疗、介入和手术需按神经功能分层决策",
-    "E04": "国家医保目录调整持续影响镇痛与神经营养用药可及性",
-    "E05": "国家医疗质量改进目标强调骨科诊疗路径标准化与质量闭环",
-    "E06": "NASS指南给出神经根型颈椎病诊疗与随访建议",
-    "E07": "AANS资料强调脊髓型颈椎病红旗征识别和及时转诊",
-    "E08": "人口老龄化与久坐工作方式共同驱动颈椎病需求结构变化",
-    "E09": "说明书修订与警示信息更新强化了药物使用边界",
-    "E10": "卫生统计显示骨科与康复服务量持续增长",
-    "E11": "外科共识提供了围手术期管理和并发症控制要点",
-    "E12": "米内网终端口径可支持医院、药店、线上三端同口径比较",
-    "E13": "疼痛管理共识强调VAS、NDI等量化指标在长期管理中的作用",
-    "E14": "中医骨伤科指南提出辨证分型与针灸推拿的协同路径",
-    "E15": "国家药监法规与公开政策文件持续强化全生命周期合规要求",
-}
-
-CERVICAL_CLINICAL_ANCHORS = {
-    "1.1": [
-        "颈椎病通常指颈椎间盘退变及继发结构改变导致的神经、脊髓或血管受压综合征，需按神经根型、脊髓型、椎动脉型等亚型分层管理[3]。",
-        "在中医骨伤视角下，颈椎病可归入“项痹”范畴，辨证分型应与现代影像分级和功能量表同步映射，避免证候与疗效终点脱节[14]。",
-    ],
-    "1.2": [
-        "颈椎病核心机制是“退变-失稳-代偿-受压”连续过程：椎间盘含水下降、纤维环退变、骨赘增生和黄韧带肥厚可共同导致椎管或椎间孔狭窄[3]。",
-        "当神经根或脊髓长期受压时，疼痛、麻木和功能障碍会呈阶段性进展，评估中应同时记录疼痛强度、神经体征和日常功能受限程度[13]。",
-    ],
-    "1.3": [
-        "第一章结论应回到三点：定义边界是否清晰、分型分级是否可执行、复评指标是否可追踪，这三项直接决定后续治疗路径稳定性[2][3]。",
-        "对于颈椎病场景，应优先保证红旗征筛查、功能量表基线和复评窗口一致性，再讨论渠道与运营策略，避免“先动作后证据”的路径偏差[5][13]。",
-    ],
-    "2.1": [
-        "颈椎病与神经系统、肌肉骨骼系统和椎动脉供血状态密切相关，单系统解释常导致误分型，需在首诊就建立跨系统评估框架[2][3]。",
-        "长期姿势负荷、睡眠质量下降与慢性疼痛会相互强化，复评时应同步跟踪疼痛轨迹、活动度和日常功能指标，避免仅以单次影像结论指导长期管理[13]。",
-    ],
-    "2.2": [
-        "并发与合并问题中需优先识别高风险信号：进行性肌无力、步态不稳、精细动作下降或脊髓受压体征，一旦出现应尽快转入上级评估[7][11]。",
-        "对反复发作患者，建议复盘既往保守治疗依从性、康复执行质量与不良事件记录，区分病程进展与执行偏差，减少无效换方案[2][13]。",
-    ],
-    "2.3": [
-        "第二章核心不是增加检查数量，而是把跨系统信息转化为可执行随访策略，如2-4周功能复评、3个月风险再分层与年度结构复盘[2][5]。",
-        "当神经体征、疼痛评分和生活功能限制被纳入同一评估表时，临床路径稳定性和多学科协同效率会明显提升[3][13]。",
-    ],
-    "3.1": [
-        "诊断环节建议采用“病史-神经体征-影像验证-风险分层”四步法，检查项目应以临床指征驱动，避免无必要检查堆叠[3]。",
-        "红旗征应单列管理，包括进行性肌力下降、步态异常、括约肌功能异常或脊髓压迫征阳性，出现任一项需升级处置等级[7][11]。",
-    ],
-    "3.2": [
-        "治疗上应坚持保守治疗、药物管理和康复训练协同推进，目标是缓解疼痛、恢复神经功能并改善生活质量，而非仅追求短期镇痛[2][13]。",
-        "药物与介入方案需严格遵循说明书、禁忌证和不良反应监测要求，手术适应证应以神经功能恶化或保守治疗失败为前提[3][9]。",
-    ],
-    "3.3": [
-        "中医辨证常见风寒湿痹、气滞血瘀和肝肾不足等路径，应用时应与现代分层评估协同，明确适用阶段和观察终点[14]。",
-        "中西医协同关键在于“证候一致+安全可控+终点可量化”，避免仅按经验叠加方案造成依从性下降或复评口径混乱[2][14]。",
-    ],
-    "3.4": [
-        "第三章收束应明确两条底线：第一，任何升级干预必须有复评证据；第二，红旗征与手术禁忌筛查必须在流程前置完成[3][7]。",
-        "若神经体征记录、功能量表和不良反应监测三项不能闭环，诊疗路径即使形式完整也难以支撑稳定疗效与合规执行[5][11]。",
-    ],
-}
-
-CERVICAL_TOPIC_DETAILS = {
-    "定义边界": "建议按神经根型、脊髓型、椎动脉型和混合型分层，并结合症状持续时间与功能受限程度定义管理边界。",
-    "分型标准": "分型应同时覆盖症状谱、神经体征和影像证据，避免单靠影像或单靠主诉做结论。",
-    "影像分级": "影像评估需与神经体征同口径解读，重点关注椎间孔狭窄、椎管狭窄和脊髓受压信号。",
-    "中西医术语映射": "中医证候应映射到疼痛强度、活动度和神经功能终点，确保疗效可核验。",
-    "病程分期": "病程分期应绑定2-4周复评窗口，区分急性加重、亚急性恢复和慢性稳定阶段。",
-    "椎间盘退变": "退变程度与症状并非线性对应，需结合体征和功能量表综合判断。",
-    "骨赘形成": "骨赘及钩椎关节增生可造成椎间孔狭窄，应关注神经根受压侧的症状对应性。",
-    "神经根受压": "神经根受压评估应覆盖放射痛分布、肌力变化和感觉异常轨迹。",
-    "脊髓受压": "脊髓受压需重点识别步态、精细动作和病理反射变化，避免延迟转诊。",
-    "椎动脉供血": "椎动脉相关症状评估应区分眩晕来源，结合体位诱发特征和神经系统检查。",
-    "认知框架": "统一认知框架应覆盖机制、分层、复评和风险处置四部分。",
-    "风险分层": "风险分层要明确低风险保守管理、中风险强化康复和高风险转诊条件。",
-    "证据导向": "建议优先引用指南、共识和监管条款，减少经验化表述。",
-    "康复协同": "康复协同需把门诊、理疗和居家训练纳入同一追踪框架。",
-    "神经功能": "神经功能评估应以肌力、感觉与反射三维度联合判读。",
-    "肌肉骨骼代偿": "长期代偿可加重颈肩背肌紧张和活动受限，应同步纳入干预。",
-    "血管供血": "供血相关症状应避免过度归因，需与神经压迫症状并行鉴别。",
-    "姿势负荷": "久坐、低头和重复性工位负荷是关键风险因子，需在管理策略中前置干预。",
-    "系统交互": "神经、肌骨、睡眠与心理因素存在交互，应采用多维度评估。",
-    "神经根型并发": "关注持续放射痛、肌力下降与感觉减退的联动变化。",
-    "脊髓型风险": "脊髓型风险需强调红旗征前移筛查和快速转诊。",
-    "椎动脉症状": "体位相关眩晕和不稳感需与其他中枢病因鉴别。",
-    "慢性疼痛失眠": "疼痛与睡眠相互强化，需同步管理而非单点干预。",
-    "焦虑抑郁": "长期疼痛可诱发焦虑抑郁，影响依从性和疗效评估。",
-    "系统管理": "系统管理应整合病史、体征、影像、处置和随访记录。",
-    "风险前移": "将红旗征筛查前置到首诊可显著降低延迟处置风险。",
-    "连续干预": "连续干预强调同一指标跨节点追踪，减少路径漂移。",
-    "依从提升": "依从管理需覆盖药物、康复训练和复诊计划执行。",
-    "病史采集": "病史应重点采集疼痛起始、诱发因素、放射痛轨迹与功能影响。",
-    "体格检查": "体格检查需标准化记录活动度、肌力、反射和诱发试验结果。",
-    "红旗征识别": "红旗征包括进行性无力、步态异常、病理反射阳性和括约肌异常。",
-    "影像路径": "影像检查应按临床指征递进选择X线、MRI或CT。",
-    "功能量表": "功能量表建议使用NDI、JOA、VAS等并在固定窗口复测。",
-    "保守治疗": "保守治疗应包含药物、理疗、康复训练和生活方式干预。",
-    "药物镇痛": "药物镇痛需平衡短期缓解与长期安全，避免长期无评估续用。",
-    "介入治疗": "介入治疗需明确适应证、禁忌证与并发症监测计划。",
-    "手术适应证": "手术决策应基于神经功能进展和保守治疗失败证据。",
-    "安全监测": "安全监测要覆盖不良事件发生时间、严重度和处置结果。",
-    "辨证分型": "辨证分型需与现代功能终点建立对应关系。",
-    "治则治法": "治则治法要明确阶段目标与禁忌场景，避免跨阶段套用。",
-    "中成药应用": "中成药应用应核对适应证、禁忌与联合用药风险。",
-    "针灸推拿": "针灸推拿需进行神经风险筛查并执行标准化操作边界。",
-    "中西协同": "中西协同重点是终点一致、节奏一致和风险边界一致。",
-    "规范路径": "规范路径应把首诊、复评与转诊条件清单化。",
-    "证据整合": "证据整合按“指南-共识-监管”顺序组织更利于执行。",
-    "风险平衡": "风险平衡强调疗效与安全并重，任何升级治疗都需监测计划。",
-    "长期管理": "长期管理应覆盖复发预防、功能维持和生活方式干预。",
-}
-
-CERVICAL_CLINICAL_REVIEW_WINDOWS = ["2周", "4周", "6周", "3个月"]
-
-CERVICAL_CLINICAL_METRICS = [
-    ("VAS下降幅度", "治疗后4周VAS评分较基线下降的分值"),
-    ("NDI改善率", "颈椎功能障碍指数较基线下降比例"),
-    ("上肢麻木缓解率", "神经根症状患者中麻木明显缓解的比例"),
-    ("JOA改善率", "脊髓型患者JOA评分改善比例"),
-    ("颈椎活动度改善率", "屈伸旋转活动度较基线提升比例"),
-    ("不良事件发生率", "治疗周期内记录到不良事件的病例占比"),
-]
-
-CERVICAL_CLINICAL_ACTIONS = [
-    "首诊即记录神经体征、影像分级和功能量表，复诊按同模板复核",
-    "对脊髓型高风险患者设置2周随访窗口，必要时快速转入手术评估",
-    "将药物、理疗和康复训练纳入统一计划，按周跟踪执行质量",
-    "把说明书禁忌、手法治疗风险和介入边界前置到处置审核环节",
-    "在复评节点同步核查疼痛、功能和不良事件，防止单指标误判",
-]
-
-CERVICAL_CLINICAL_RISKS = [
-    "红旗征识别不及时导致转诊延迟",
-    "影像分级与症状分层不一致",
-    "复评节点缺失导致病程判断偏差",
-    "不良事件记录不完整影响安全决策",
-    "手法治疗禁忌筛查不足造成风险累积",
-    "居家康复执行偏差导致疗程中断",
-]
-
-
-def current_evidence_snippets() -> Dict[str, str]:
-    if is_cervical_profile():
-        return CERVICAL_EVIDENCE_SNIPPETS
-    if is_respiratory_profile():
-        return EVIDENCE_SNIPPETS
-    return GENERIC_EVIDENCE_SNIPPETS
-
-
-def current_clinical_anchors() -> Dict[str, List[str]]:
-    if is_cervical_profile():
-        return CERVICAL_CLINICAL_ANCHORS
-    if is_respiratory_profile():
-        return CLINICAL_ANCHORS
-    return GENERIC_CLINICAL_ANCHORS
-
-
-def current_clinical_topic_details() -> Dict[str, str]:
-    if is_cervical_profile():
-        return CERVICAL_TOPIC_DETAILS
-    if is_respiratory_profile():
-        return CLINICAL_TOPIC_DETAILS
-    return GENERIC_TOPIC_DETAILS
-
-
-def current_clinical_review_windows() -> List[str]:
-    if is_cervical_profile():
-        return CERVICAL_CLINICAL_REVIEW_WINDOWS
-    if is_respiratory_profile():
-        return CLINICAL_REVIEW_WINDOWS
-    return GENERIC_CLINICAL_REVIEW_WINDOWS
-
-
-def current_clinical_metrics() -> List[Tuple[str, str]]:
-    if is_cervical_profile():
-        return CERVICAL_CLINICAL_METRICS
-    if is_respiratory_profile():
-        return CLINICAL_METRICS
-    return GENERIC_CLINICAL_METRICS
-
-
-def current_clinical_actions() -> List[str]:
-    if is_cervical_profile():
-        return CERVICAL_CLINICAL_ACTIONS
-    if is_respiratory_profile():
-        return CLINICAL_ACTIONS
-    return GENERIC_CLINICAL_ACTIONS
-
-
-def current_clinical_risks() -> List[str]:
-    if is_cervical_profile():
-        return CERVICAL_CLINICAL_RISKS
-    if is_respiratory_profile():
-        return CLINICAL_RISKS
-    return GENERIC_CLINICAL_RISKS
-
-
-def clinical_topic_detail(topic: str, idx: int = 0, seed: int = 0) -> str:
-    details = current_clinical_topic_details()
-    if topic in details:
-        return details[topic]
-    topic_score = sum(ord(ch) for ch in topic)
-    template = DEFAULT_TOPIC_DETAIL_TEMPLATES[(topic_score + idx + seed) % len(DEFAULT_TOPIC_DETAIL_TEMPLATES)]
-    return template.format(topic=topic)
-
-
-def generate_clinical_paragraph(topic: str, evidence: str, cite: str, idx: int, seed: int) -> str:
-    metrics = current_clinical_metrics()
-    actions = current_clinical_actions()
-    risks = current_clinical_risks()
-    review_windows = current_clinical_review_windows()
-    metric_name, metric_def = metrics[(idx + seed) % len(metrics)]
-    action = actions[(idx + seed + 2) % len(actions)]
-    risk = risks[(idx + seed + 1) % len(risks)]
-    review_window = review_windows[(idx + seed) % len(review_windows)]
-    template = CLINICAL_FRAME_TEMPLATES[(idx + seed) % len(CLINICAL_FRAME_TEMPLATES)]
-    detail = clinical_topic_detail(topic, idx=idx, seed=seed)
-    return template.format(
-        topic=topic,
-        evidence=evidence,
-        cite=cite,
-        detail=detail,
-        metric_name=metric_name,
-        metric_def=metric_def,
-        review_window=review_window,
-        risk=risk,
-        action=action,
-    )
-
-
-def generate_generic_block(spec: BlockSpec, context: Dict[str, str], seed: int = 0) -> str:
-    paras: List[str] = []
-    anchors = current_clinical_anchors()
-    evidence_snippets = current_evidence_snippets()
-    if spec.block_id in anchors:
-        paras.extend(anchors[spec.block_id])
-    local_seen = set()
-    for p in paras:
-        local_seen.add(p)
-    eids = [x for x in spec.evidence_ids.split("|") if x]
-    i = 0
-    while len("".join(paras)) < spec.target_chars and i < 220:
-        topic = spec.topics[i % len(spec.topics)]
-        eid = eids[i % len(eids)] if eids else "E15"
-        evidence = evidence_snippets.get(eid, evidence_snippets.get("E15", "公开政策与指南持续强化规范化执行边界"))
-        cite = f"[{EID_TO_REF.get(eid, 15)}]"
-
-        if spec.chapter <= 3:
-            para = generate_clinical_paragraph(topic=topic, evidence=evidence, cite=cite, idx=i, seed=seed + spec.chapter)
-        else:
-            opening = OPENING_TEMPLATES[(i + seed + spec.chapter) % len(OPENING_TEMPLATES)].format(
-                topic=topic, disease=DISEASE_NAME, evidence=evidence, cite=cite
-            )
-            mechanism = MECHANISM_TEMPLATES[(i * 2 + spec.chapter) % len(MECHANISM_TEMPLATES)].format(topic=topic)
-            metric_name, metric_def = METRIC_LIBRARY[(i + spec.chapter + seed) % len(METRIC_LIBRARY)]
-            action = ACTION_LIBRARY[(i + spec.chapter + 3) % len(ACTION_LIBRARY)]
-            risk = RISK_LIBRARY[(i + seed + 1) % len(RISK_LIBRARY)]
-            threshold_pool = [">=75%", ">=80%", ">=85%", ">=90%"]
-            threshold = threshold_pool[(i + seed + spec.chapter) % len(threshold_pool)]
-            para = (
-                f"{opening} {mechanism}"
-                f" 围绕“{topic}”，建议把“{metric_name}”定义为：{metric_def}，达标阈值建议设为{threshold}并按月输出同口径结果。"
-                f" 当前主要风险是“{risk}”，针对“{topic}”的对应动作是：{action}。"
-            )
-        if spec.chapter > 3 and i in (0, 3):
-            para += " " + CONTEXT_SENTENCES[(i + spec.chapter) % len(CONTEXT_SENTENCES)].format(topic=topic)
-        if spec.chapter > 3 and i == 0 and context.get("latest_q"):
-            para += (
-                f" 以{context['latest_q']}为观察点，围绕“{topic}”的三端合计规模基线为{context['total_latest']}万元，"
-                f"该值可用于评估对应动作上线后的边际变化。"
-            )
-
-        if para not in local_seen:
-            paras.append(para)
-            local_seen.add(para)
-        i += 1
-
-    if paras and paras[0].startswith(spec.subtitle):
-        paras[0] = paras[0][len(spec.subtitle) :].lstrip("：:，,。 ")
-    return "\n\n".join(paras)
-
-
-def build_ch4_blocks(ch4: Ch4Data) -> Dict[str, str]:
-    latest_q = ch4.latest_quarter
-    lr = ch4.latest_share.set_index("channel")["sales"].to_dict()
-    share = ch4.latest_share.set_index("channel")["share_pct"].to_dict()
-    yoy = ch4.yoy_latest.set_index("channel")["yoy_pct"].to_dict()
-    cr5 = ch4.cr5_latest.set_index("channel")["cr5_pct"].to_dict()
-
-    total_latest = float(ch4.latest_share["sales"].sum())
-    annual = ch4.annual.copy()
-    q = ch4.quarterly.copy()
-    q["qnum"] = q["quarter"].str[-1].astype(int)
-    q["qk"] = q["quarter"].apply(qkey)
-    q = q.sort_values("qk").reset_index(drop=True)
-    q_count = q.groupby("year").size()
-    channel_cols = [("医院端", "hospital"), ("药店端", "drugstore"), ("线上端", "online")]
-
-    full_years = sorted([int(y) for y, n in q_count.items() if n >= 4])
-    cagr = np.nan
-    cagr_window = "N/A"
-    if len(full_years) >= 2:
-        af = annual[annual["year"].isin(full_years)].sort_values("year")
-        start_total = float(af.iloc[0]["total"])
-        end_total = float(af.iloc[-1]["total"])
-        years = int(af.iloc[-1]["year"] - af.iloc[0]["year"])
-        if years > 0 and start_total > 0:
-            cagr = (end_total / start_total) ** (1 / years) - 1
-            cagr_window = f"{int(af.iloc[0]['year'])}-{int(af.iloc[-1]['year'])}"
-
-    start_q = str(q.iloc[0]["quarter"])
-    start_total = float(q.iloc[0]["total"])
-    latest_total = float(q.iloc[-1]["total"])
-    prev_q = start_q
-    qoq_total = np.nan
-    if len(q) >= 2:
-        prev_q = str(q.iloc[-2]["quarter"])
-        prev_total = float(q.iloc[-2]["total"])
-        if prev_total > 0:
-            qoq_total = latest_total / prev_total - 1
-
-    share_start: Dict[str, float] = {}
-    share_delta: Dict[str, float] = {}
-    for ch_name, col in channel_cols:
-        start_share = float(q.iloc[0][col] / start_total) if start_total > 0 else np.nan
-        latest_share = float(q.iloc[-1][col] / latest_total) if latest_total > 0 else np.nan
-        share_start[ch_name] = start_share
-        share_delta[ch_name] = latest_share - start_share
-
-    full_prev_year = None
-    full_last_year = None
-    full_year_growth_total = np.nan
-    full_year_growth_channel: Dict[str, float] = {x[0]: np.nan for x in channel_cols}
-    if len(full_years) >= 2:
-        af = annual[annual["year"].isin(full_years)].sort_values("year").reset_index(drop=True)
-        full_prev_year = int(af.iloc[-2]["year"])
-        full_last_year = int(af.iloc[-1]["year"])
-        prev_total_full = float(af.iloc[-2]["total"])
-        last_total_full = float(af.iloc[-1]["total"])
-        if prev_total_full > 0:
-            full_year_growth_total = last_total_full / prev_total_full - 1
-        for ch_name, col in channel_cols:
-            base = float(af.iloc[-2][col])
-            last = float(af.iloc[-1][col])
-            if base > 0:
-                full_year_growth_channel[ch_name] = last / base - 1
-
-    def top10_coverage(top_df: pd.DataFrame, denom: float) -> float:
-        if top_df.empty or denom <= 0:
-            return np.nan
-        return float(top_df["sales"].sum() / denom)
-
-    def top1_share(top_df: pd.DataFrame, denom: float) -> float:
-        if top_df.empty or denom <= 0:
-            return np.nan
-        return float(top_df.iloc[0]["sales"] / denom)
-
-    top10_cov = {
-        "医院端": top10_coverage(ch4.top_hospital, float(lr["医院端"])),
-        "药店端": top10_coverage(ch4.top_drugstore, float(lr["药店端"])),
-        "线上端": top10_coverage(ch4.top_online, float(lr["线上端"])),
-    }
-    top1_cov = {
-        "医院端": top1_share(ch4.top_hospital, float(lr["医院端"])),
-        "药店端": top1_share(ch4.top_drugstore, float(lr["药店端"])),
-        "线上端": top1_share(ch4.top_online, float(lr["线上端"])),
-    }
-
-    latest_year = int(q["year"].max())
-    latest_q_count = int(q_count.loc[latest_year])
-    ytd_yoy = np.nan
-    if latest_q_count < 4 and (latest_year - 1) in q_count.index:
-        latest_ytd = q[(q["year"] == latest_year) & (q["qnum"] <= latest_q_count)]["total"].sum()
-        prev_ytd = q[(q["year"] == latest_year - 1) & (q["qnum"] <= latest_q_count)]["total"].sum()
-        if prev_ytd > 0:
-            ytd_yoy = latest_ytd / prev_ytd - 1
-    if pd.isna(cagr):
-        long_term_view = "长期趋势样本不足，需补齐完整年度后再判断扩张或收缩"
-    elif cagr >= 0:
-        long_term_view = "在完整年度口径下市场总体扩张"
-    else:
-        long_term_view = "在完整年度口径下市场总体收缩"
-
-    if pd.isna(ytd_yoy):
-        short_term_view = "当前年度口径完整，可直接做全年对比"
-    elif ytd_yoy >= 0:
-        short_term_view = "短期（YTD）表现为同比回升"
-    else:
-        short_term_view = "短期（YTD）表现为同比回落"
-
-    def fnum(v: float) -> str:
-        return f"{v:,.0f}"
-
-    def fpct(v: float) -> str:
-        if pd.isna(v):
-            return "N/A"
-        return f"{v*100:.1f}%" if abs(v) < 1 else f"{v:.1f}%"
-
-    yoy_rank = sorted(
-        [(k, v) for k, v in yoy.items() if pd.notna(v)],
-        key=lambda x: x[1],
-        reverse=True,
-    )
-    yoy_fast = yoy_rank[0][0] if yoy_rank else "医院端"
-    yoy_slow = yoy_rank[-1][0] if yoy_rank else "线上端"
-
-    cr5_tr = ch4.cr5_trend.copy()
-    cr5_tr["qk"] = cr5_tr["quarter"].apply(qkey)
-    cr5_tr = cr5_tr.sort_values("qk")
-    cr5_first_q = latest_q
-    cr5_last_q = latest_q
-    cr5_delta = {"医院端": np.nan, "药店端": np.nan, "线上端": np.nan}
-    top_channel_stable = False
-    if not cr5_tr.empty:
-        cr5_first_q = str(cr5_tr.iloc[0]["quarter"])
-        cr5_last_q = str(cr5_tr.iloc[-1]["quarter"])
-        first_map = cr5_tr[cr5_tr["quarter"] == cr5_first_q].set_index("channel")["cr5_pct"].to_dict()
-        last_map = cr5_tr[cr5_tr["quarter"] == cr5_last_q].set_index("channel")["cr5_pct"].to_dict()
-        for ch_name in cr5_delta.keys():
-            if ch_name in first_map and ch_name in last_map:
-                cr5_delta[ch_name] = float(last_map[ch_name]) - float(first_map[ch_name])
-
-        uq = sorted(cr5_tr["quarter"].drop_duplicates().tolist(), key=qkey)
-        recent_q = uq[-4:]
-        recent_top: List[str] = []
-        for qv in recent_q:
-            sub = cr5_tr[cr5_tr["quarter"] == qv]
-            if not sub.empty:
-                recent_top.append(sub.sort_values("cr5_pct", ascending=False).iloc[0]["channel"])
-        top_channel_stable = len(recent_top) >= 2 and len(set(recent_top)) == 1
-
-    cr5_vals = [v for v in cr5.values() if pd.notna(v)]
-    cr5_gap = max(cr5_vals) - min(cr5_vals) if len(cr5_vals) >= 2 else np.nan
-
-    t41 = [
-        f"第4章以米内网三端终端数据为基础，按{latest_q}口径，三端合计销售额为{fnum(total_latest)}万元。医院端为{fnum(lr['医院端'])}万元，占比{fpct(share['医院端'])}；药店端为{fnum(lr['药店端'])}万元，占比{fpct(share['药店端'])}；线上端为{fnum(lr['线上端'])}万元，占比{fpct(share['线上端'])}[9]。",
-        f"从季度序列看，医院端仍是规模锚点，院外渠道承担更多长期管理与复购承接功能。三端波动节奏并不同步，提示渠道策略需要分开建模而非统一投放[8]。",
-        f"在可比完整年度窗口（{cagr_window}）下，总规模年复合增速约为{fpct(cagr)}。该指标仅基于完整年度计算，避免将未完结年度与完整年度直接比较导致误判[12]。",
-        (
-            f"由于{latest_year}年当前仅覆盖Q1-Q{latest_q_count}，更合理的短期观察口径是YTD同比："
-            f"{latest_year}Q1-Q{latest_q_count}较{latest_year-1}Q1-Q{latest_q_count}变化{fpct(ytd_yoy)}。"
-            if pd.notna(ytd_yoy)
-            else "当前年度为完整口径，可直接与历史全年比较。"
-        ),
-        f"从{start_q}到{latest_q}，三端合计规模由{fnum(start_total)}万元提升至{fnum(latest_total)}万元，绝对变化{fnum(latest_total-start_total)}万元。该变化可在quarterly_channel表按同口径逐季核验[12]。",
-        (
-            f"{latest_q}较上一季度（{prev_q}）环比变化{fpct(qoq_total)}，短期波动反映渠道节奏错位，预算执行更适合按滚动窗口而非单点季度判断[12]。"
-            if pd.notna(qoq_total)
-            else "当前季度序列样本不足，无法形成稳定环比判断，需在补齐后再给出短期节奏结论[12]。"
-        ),
-        f"结构迁移方面，医院端份额较{start_q}变化{fpct(share_delta['医院端'])}，药店端变化{fpct(share_delta['药店端'])}，线上端变化{fpct(share_delta['线上端'])}。这说明渠道结构并非静态，需要将促销、教育和随访动作拆分到不同终端[12]。",
-        (
-            f"在完整年度对比中，{full_last_year}年较{full_prev_year}年总规模变化{fpct(full_year_growth_total)}，其中医院端{fpct(full_year_growth_channel['医院端'])}、药店端{fpct(full_year_growth_channel['药店端'])}、线上端{fpct(full_year_growth_channel['线上端'])}。"
-            if full_prev_year is not None
-            else "完整年度不足2个时，不宜直接做年度同比强结论，应以YTD与季度结构作为阶段判断主轴。"
-        ),
-        "对经营层而言，医院端应强调证据与准入，药店端应强调动销与教育，线上端应强调触达效率与复购管理。三端若沿用同一话术和同一KPI，通常会造成资源错配与转化损耗[15]。",
-        "因此本章后续分析以“规模-结构-竞争”三层逻辑展开：先看总量与结构，再看重点品种，最后看集中度与竞争节奏，确保结论可在聚合表中复算验证。",
-    ]
-
-    t42 = [
-        f"在{latest_q}时点，医院端TOP1通用名为{ch4.top_latest_name['医院端']}，药店端TOP1为{ch4.top_latest_name['药店端']}，线上端TOP1为{ch4.top_latest_name['线上端']}。头部品种在不同渠道的稳定性和增速差异明显，反映出触达方式与决策逻辑差异[8]。",
-        "医院端更依赖临床路径一致性和科室教育强度，药店端更依赖终端推荐与价格带管理，线上端更依赖内容可信度和履约体验。三端的经营动作如果完全同构，往往难以达到最优转化。",
-        "从生命周期角度看，成熟品种要通过服务延伸和依从管理提升复购质量，新进入品种要通过细分场景建立需求锚点。仅靠促销驱动的增长通常难以穿越监管与支付周期[10]。",
-        f"同比维度上，{latest_q}相较上年同季度，医院端增速为{fpct(yoy['医院端'])}，药店端为{fpct(yoy['药店端'])}，线上端为{fpct(yoy['线上端'])}。该差异提示预算配置应采用滚动校准机制，而非固定配比[9]。",
-        f"在最新季度，医院端TOP10覆盖率约为{fpct(top10_cov['医院端'])}，药店端约为{fpct(top10_cov['药店端'])}，线上端约为{fpct(top10_cov['线上端'])}。覆盖率越高，说明头部品种对渠道动销解释力越强[12]。",
-        f"从单品贡献看，三端TOP1在各自渠道中的占比依次约为医院端{fpct(top1_cov['医院端'])}、药店端{fpct(top1_cov['药店端'])}、线上端{fpct(top1_cov['线上端'])}。若TOP1占比持续上升，需同步评估结构风险与替代品压力[12]。",
-        f"同比排序显示{yoy_fast}增速领先而{yoy_slow}相对承压，预算分配应优先保障增速领先渠道的供给稳定，同时在承压渠道修复教育触达与终端转化链路[9]。",
-        "对于新增品种，建议先在渠道特征匹配度最高的终端建立首批真实世界证据，再扩展到次优渠道，以避免一开始跨终端同强度投放导致投入稀释[15]。",
-        "此外，剂型组合与价格带布局需要按渠道分别优化。若企业只看销量不看毛利、复购周期与疗程完成率，可能出现规模增长但经营质量下降的问题。",
-    ]
-
-    cr5_rank = sorted(
-        [("医院端", cr5["医院端"]), ("药店端", cr5["药店端"]), ("线上端", cr5["线上端"])],
-        key=lambda x: x[1] if pd.notna(x[1]) else -1,
-        reverse=True,
-    )
-    top_channel = cr5_rank[0][0]
-    t43 = [
-        f"以集中度衡量竞争格局，{latest_q}医院端CR5为{fpct(cr5['医院端'])}，药店端CR5为{fpct(cr5['药店端'])}，线上端CR5为{fpct(cr5['线上端'])}。按当前口径，{top_channel}集中度最高[12]。",
-        "当CR5处于60%-75%区间时，头部优势通常来自三项能力叠加：临床证据、渠道执行、数字化运营。只具备其中一项能力，往往难以在季度波动期维持份额稳定[12]。",
-        "对挑战者而言，更可行的路径是在2-3个细分人群或细分场景先形成可验证结果，再逐步放大，而不是直接在全渠道与头部品牌正面竞争[8]。",
-        f"从时间趋势看，CR5由{cr5_first_q}到{cr5_last_q}分别变化：医院端{fpct(cr5_delta['医院端'])}、药店端{fpct(cr5_delta['药店端'])}、线上端{fpct(cr5_delta['线上端'])}。这说明竞争强度在不同终端并非同向变化[12]。",
-        f"以当前季度横截面观察，三端集中度最高与最低之间的差值约为{fpct(cr5_gap)}。当差值扩大时，统一打法会放大资源错配，需按端口设定独立份额目标[12]。",
-        (
-            f"近4个季度集中度最高渠道保持为{top_channel}，提示头部壁垒呈持续状态，挑战者更应从细分场景切入而非追求全端同步扩张[12]。"
-            if top_channel_stable
-            else "近4个季度集中度最高渠道存在轮动，说明竞争格局尚未固化，企业可通过阶段性投放与快速复盘争取结构窗口[12]。"
-        ),
-        "在竞争评估中，建议把CR5与TOP10覆盖率联动观察：若CR5上升但TOP10覆盖率下降，往往意味着“头部更头部、腰部更分散”，此时招商与教育策略应分层配置[15]。",
-        "未来2-3年，竞争焦点将从单品规模竞争转向“产品+服务+数据”组合竞争。能把月度复购率、季度留存率和不良反应上报及时率放进同一看板的企业，更可能获得预算倾斜[10]。",
-        "从组织能力建设看，市场、医学、准入和数字化团队需要共用同一指标体系，并至少按月复盘1次关键指标，避免出现“策略正确但执行割裂”的常见问题[15]。",
-    ]
-
-    t44 = [
-        f"基于米内网三端数据，本章形成三项核心判断：第一，{long_term_view}，且{short_term_view}；第二，头部品种稳定性仍在，但渠道间增长机制显著分化；第三，竞争焦点正在由单点销量转向全链路效率[9]。",
-        "面向市场部，建议优先建立跨渠道一致的医学价值表达，并将复购与疗程完成率纳入月度核心指标。面向战略部，建议将季度数据复盘机制制度化，形成“结论-动作-复盘-迭代”的闭环。",
-        "执行层面应将“规模、结构、集中度”三组指标固化到同一看板：规模看季度与YTD、结构看份额迁移、竞争看CR5与TOP10覆盖率，确保管理动作可直接映射到数据结果[12]。",
-        f"若以{latest_q}为当前基线，建议把下阶段考核阈值设置为：渠道份额变化绝对值控制在±2个百分点内、重点渠道同比增速不低于其近4季均值、CR5异常波动触发专项复盘。上述阈值可按季度滚动修正[12]。",
-        "对市场与医学协同而言，优先级应是“先统一证据口径，再统一外部表述，最后统一考核模板”。若先做传播后补证据，通常会导致终端解释成本上升并侵蚀转化效率[15]。",
-        "对战略部门而言，应每季度滚动评估渠道角色分工：医院端承担证据锚定与处方稳定，药店端承担动销放大与依从管理，线上端承担触达扩展与复购提醒，三端联动才能形成可持续增长曲线[9]。",
-        "在执行优先级上，应先确保口径统一和数据可信，再推进跨部门协同，最后进行策略微调。只有基础数据稳定，策略优化才具备可解释性与可复制性[15]。",
-        "本章形成的聚合表与图表可直接用于后续季度滚动更新，既可支撑管理层决策，也可作为一线团队的执行看板与校准依据。",
-    ]
-
-    blocks = {"4.1": "\n\n".join(t41), "4.2": "\n\n".join(t42), "4.3": "\n\n".join(t43), "4.4": "\n\n".join(t44)}
-
-    supplement_pool = [
-        "方法层面，本章所有结论均可回溯到ch04_agg_tables.xlsx中的quarterly_channel、annual_channel、cr5_trend等表，禁止使用脱离原始口径的二次估算值[12]。",
-        f"当新增季度数据（>{latest_q}）时，建议先更新聚合表再重算图表，避免仅替换图中标签而未同步修正同比和集中度，造成管理层对趋势的误读[12]。",
-        "从可执行性看，季度复盘至少应回答三项问题：规模是否达成、结构是否优化、竞争是否趋稳；三项指标若只满足其一，不建议直接扩大投放范围[15]。",
-        "来源一致性同样是治理重点，第四章图表与正文均采用“数据来源：米内网”固定口径，可降低跨部门讨论时的解释偏差并提高复盘效率[12]。",
-        "对于跨渠道策略，不应将单一渠道的短期增速外推为全渠道趋势。正确做法是分端校准并设置触发阈值，再决定预算迁移方向与强度[9]。",
-        "若后续出现政策或支付规则变化，需优先回看同季度CR5与渠道份额的联动变化，再判断是需求变动还是执行偏差，以避免策略反应过度[15]。",
-        "在数据治理方面，建议将季度口径、指标定义、阈值规则写入标准化字典并版本化管理，确保不同批次报告在同一标准下可直接对比[12]。",
-        "对一线团队而言，推荐将TOP10覆盖率与疗程完成率并行监测：前者反映品种结构强弱，后者反映执行质量，两者共同决定真实增长质量[10]。",
-    ]
-    block_cycle = ["4.1", "4.2", "4.3", "4.4"]
-    for idx, para in enumerate(supplement_pool):
-        ch4_chars = sum(len(re.sub(r"\s+", "", txt)) for txt in blocks.values())
-        if ch4_chars >= 3200:
-            break
-        key = block_cycle[idx % len(block_cycle)]
-        blocks[key] = blocks[key] + "\n\n" + para
-
-    return blocks
-
-
 def chapter_title(chapter: int) -> str:
     names = {
         1: f"第一章 {DISEASE_NAME}概述与定义边界",
@@ -1516,115 +2153,6 @@ def clean_title_prefix(subtitle: str, text: str) -> str:
             out.append(p)
             seen.add(p)
     return "\n\n".join(out)
-
-
-def build_text_outputs(ch4: Ch4Data) -> Tuple[Dict[str, str], str]:
-    specs = build_block_specs()
-    ch4_blocks = build_ch4_blocks(ch4)
-    context = {
-        "latest_q": ch4.latest_quarter,
-        "total_latest": f"{int(ch4.latest_share['sales'].sum()):,}",
-    }
-    block_text: Dict[str, str] = {}
-    for idx, spec in enumerate(specs):
-        raw = (
-            ch4_blocks[spec.block_id]
-            if spec.block_id.startswith("4.")
-            else generate_generic_block(spec, context=context, seed=idx + 11)
-        )
-        block_text[spec.block_id] = clean_title_prefix(spec.subtitle, raw)
-
-    # Guarantee chapter-level minimum text volume before TXT gate checks.
-    top_up_templates = [
-        "执行层面应把“目标指标-复评窗口-触发动作”写成清单，并在季度复盘中检查偏差来源，避免把阶段性波动误判为长期趋势。",
-        "建议在同一章节内保持指标口径一致，至少覆盖规模、结构和风险三组维度，以便跨部门讨论时能够直接复算和追踪。",
-        "对关键结论应明确可操作动作、责任角色和时间节点，确保策略不止停留在方向判断，而能落地到可审计的执行链路。",
-        "当外部政策、渠道结构或患者行为发生变化时，应优先校准基线假设，再迭代动作强度，防止一次性调整造成资源浪费。",
-        "每轮复盘都应同时回答“结论是否成立、动作是否执行、结果是否改进”三项问题，并保留可追溯证据以支持后续决策。",
-    ]
-    chapter_specs: Dict[int, List[BlockSpec]] = {}
-    for s in specs:
-        chapter_specs.setdefault(s.chapter, []).append(s)
-    for ch in range(1, 8):
-        ch_blocks = chapter_specs.get(ch, [])
-        if not ch_blocks:
-            continue
-        ch_text = "\n".join(block_text[s.block_id] for s in ch_blocks)
-        ch_chars = len(re.sub(r"\s+", "", ch_text))
-        min_chars = CHAPTER_MIN_CHARS.get(ch, 0)
-        if ch_chars >= min_chars:
-            continue
-        tail_block_id = ch_blocks[-1].block_id
-        deficit = min_chars - ch_chars
-        i = 0
-        while deficit > 0 and i < 20:
-            para = (
-                f"在第{ch}章补充说明中，{top_up_templates[i % len(top_up_templates)]}"
-                f" 该动作与{DISEASE_NAME}管理路径保持一致，并以[{(i % 15) + 1}]作为可追溯证据索引。"
-            )
-            block_text[tail_block_id] = block_text[tail_block_id] + "\n\n" + para
-            deficit -= len(re.sub(r"\s+", "", para))
-            i += 1
-
-    by_chapter: Dict[int, List[BlockSpec]] = {}
-    for s in specs:
-        by_chapter.setdefault(s.chapter, []).append(s)
-
-    for ch in range(1, 8):
-        lines = []
-        for s in by_chapter[ch]:
-            lines.append(f"[[BLOCK_ID={s.block_id}]]")
-            lines.append(s.subtitle)
-            lines.append(block_text[s.block_id])
-            lines.append(f"[[END_BLOCK_ID={s.block_id}]]")
-            lines.append("")
-        write_text(OUT_ROOT / f"ch0{ch}.txt", "\n".join(lines).strip() + "\n")
-
-    if is_cervical_profile():
-        summary = (
-            f"本报告围绕{DISEASE_NAME}形成了“流行负担、临床分层、市场结构、政策边界、战略执行”五位一体分析框架。"
-            "在需求端，老龄化、久坐工作方式和慢性疼痛管理需求共同推动就诊与治疗需求上升，企业价值表达应从短期止痛扩展到长期功能恢复。"
-            "在临床端，分层诊疗与规范复评是稳定疗效的关键，建议以VAS、NDI、JOA改善率和不良事件发生率作为跨节点主指标。"
-            f"在市场端，医院、药店、线上三端呈互补关系，{ch4.latest_quarter}结构显示医院端仍是规模锚点，院外端承担复购与长期管理承接功能。"
-            "在政策端，支付与监管规则持续更新，企业需将说明书边界、禁忌筛查和推广表达统一到同一合规口径。"
-            "在执行端，建议采用“月度监测-季度复盘-年度校准”节奏，将处方稳定性、复评完成率与康复依从率纳入跨部门共用看板。"
-            "第四章基于米内网数据构建了“规模-结构-竞争”三层证据链，可支持策略从经验判断转向可复算、可追踪的量化决策。"
-            "对市场团队而言，优先级应是巩固医院端证据锚点，再提升药店端动销与患者教育效率，并通过线上端强化触达和随访管理。"
-            "对医学与准入团队而言，应将指南要点、手术与介入边界、支付规则映射到统一口径，降低终端解释成本和合规风险。"
-            "对管理层而言，建议将渠道份额、同比增速、CR5、TOP10覆盖率纳入季度固定看板，并将异常阈值与复盘动作制度化。"
-            "当临床终点、经营指标与政策边界保持同口径联动时，资源配置效率更高，跨部门执行一致性更容易形成持续优势。"
-        )
-    elif is_respiratory_profile():
-        summary = (
-            f"本报告围绕{DISEASE_NAME}形成了“需求基础、临床路径、市场格局、政策边界、战略执行”五位一体的分析框架。"
-            "在需求端，儿童人群对安全性、可及性和依从性的要求显著高于成人场景，因此企业的价值表达必须从单次起效扩展到全疗程管理。"
-            "在临床端，分层评估与规范路径是提升疗效稳定性的关键，建议用夜间咳嗽评分、体温恢复时间、SpO2稳定率和不良反应发生率做复评主指标。"
-            f"在市场端，医院、药店、线上三端呈协同关系，{ch4.latest_quarter}结构显示医院端仍是规模锚点，院外端承担更多复购与随访承接功能。"
-            "在政策端，支付与监管规则持续更新，企业需要将说明书年龄限制、风险提示和推广内容统一到同一合规口径。"
-            "在执行端，建议采用“月度监测—季度复盘—年度校准”节奏，把处方稳定性、无效换药率和复诊转化率作为跨部门共用指标。"
-            "第四章基于米内网数据构建了“规模-结构-竞争”三层证据链，能够支持策略从经验判断转向可复算、可追踪的量化决策。"
-            "对市场团队而言，优先级应是先稳住医院端证据锚点，再放大药店端动销与教育效率，最后通过线上端优化触达和复购节奏。"
-            "对医学与准入团队而言，需要把关键指南要点、说明书边界与支付规则统一映射到同一传播口径，降低终端解释成本与合规风险。"
-            "对管理层而言，建议将渠道份额、同比增速、CR5、TOP10覆盖率纳入季度固定看板，并将异常阈值与复盘动作提前制度化。"
-            "当临床终点、经营指标和政策边界保持同口径联动时，策略迭代方向会更清晰，资源配置效率也更稳定，跨部门执行的一致性也更容易形成持续优势。"
-        )
-    else:
-        summary = (
-            f"本报告围绕{DISEASE_NAME}形成了“疾病负担、临床路径、市场结构、政策约束、战略执行”五位一体分析框架。"
-            "在需求端，患者结构、复诊行为与长期管理诉求共同决定治疗方案选择，企业价值表达需从短期改善扩展到全周期管理。"
-            "在临床端，分层评估与规范复评是稳定疗效的核心，建议以主要症状改善率、功能恢复率、疗程完成率和不良事件发生率作为跨节点指标。"
-            f"在市场端，医院、药店、线上三端呈互补关系，{ch4.latest_quarter}结构显示医院端仍是规模锚点，院外端承担更多复购与随访承接功能。"
-            "在政策端，支付规则与监管要求持续更新，企业需要将适应证边界、禁忌信息和传播内容统一到同一合规口径。"
-            "在执行端，建议采用“月度监测-季度复盘-年度校准”节奏，把分层准确率、复评达标率和依从达标率纳入跨部门共用看板。"
-            "第四章基于米内网数据构建了“规模-结构-竞争”三层证据链，可支持策略从经验判断转向可复算、可追踪的量化决策。"
-            "对市场团队而言，优先级应是先巩固医院端证据锚点，再提升药店端动销与患者教育效率，最后通过线上端优化触达和复购节奏。"
-            "对医学与准入团队而言，应把指南要点、说明书边界与支付规则映射到统一传播口径，降低终端解释成本与合规风险。"
-            "对管理层而言，建议将渠道份额、同比增速、CR5、TOP10覆盖率纳入季度固定看板，并将异常阈值与复盘动作制度化。"
-            "当临床终点、经营指标和政策边界保持同口径联动时，资源配置效率更高，跨部门执行一致性更容易形成持续优势。"
-        )
-    write_text(OUT_ROOT / "summary.txt", summary + "\n")
-    write_evidence_and_refs()
-    return block_text, summary
 
 
 def write_evidence_and_refs() -> Tuple[str, str]:
@@ -1685,25 +2213,51 @@ def save_figure(path: Path, fig) -> None:
 def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = "lr", color: str = "#2B6CB0", figsize=(10, 3.5)) -> None:
     fig, ax = plt.subplots(figsize=figsize)
     ax.axis("off")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    n_nodes = max(len(nodes), 1)
+
+    def _flow_box_size(text: str) -> float:
+        raw = normalize_disease_text(text).replace("\n", "").strip()
+        return min(0.20, max(0.12, 0.075 + len(raw) * 0.0065))
 
     if direction == "lr":
-        xs = np.linspace(0.1, 0.9, len(nodes))
-        ys = np.full(len(nodes), 0.5)
-    else:
-        xs = np.full(len(nodes), 0.5)
-        ys = np.linspace(0.9, 0.1, len(nodes))
+        widths = [_flow_box_size(text) for text in nodes]
+        gap = 0.035 if n_nodes >= 5 else 0.05
+        available = 0.86
+        total_width = sum(widths) + gap * max(0, n_nodes - 1)
+        if total_width > available and sum(widths) > 0:
+            scale = max(0.60, (available - gap * max(0, n_nodes - 1)) / sum(widths))
+            widths = [max(0.11, w * scale) for w in widths]
 
-    for i, (x, y, text) in enumerate(zip(xs, ys, nodes)):
-        bbox = dict(boxstyle="round,pad=0.35", fc="#E6F2FF", ec=color, lw=1.2)
-        ax.text(x, y, normalize_disease_text(text), ha="center", va="center", fontsize=10, bbox=bbox)
-        if i < len(nodes) - 1:
-            x2, y2 = xs[i + 1], ys[i + 1]
-            ax.annotate(
-                "",
-                xy=(x2 - 0.05 if direction == "lr" else x2, y2 + 0.05 if direction != "lr" else y2),
-                xytext=(x + 0.05 if direction == "lr" else x, y - 0.05 if direction != "lr" else y),
-                arrowprops=dict(arrowstyle="->", color=color, lw=1.6),
-            )
+        anchors: List[Dict[str, Tuple[float, float]]] = []
+        cursor = 0.07
+        for width, text in zip(widths, nodes):
+            x = cursor + width / 2.0
+            anchors.append(draw_box_node(ax, x, 0.50, text, width=width, height=0.12, fc="#E6F2FF", ec=color, lw=1.2, fontsize=9.2))
+            cursor += width + gap
+
+        for i in range(len(anchors) - 1):
+            draw_poly_arrow(ax, [anchors[i]["east"], anchors[i + 1]["west"]], color=color, lw=1.6)
+    else:
+        heights = [_flow_box_size(text) * 0.72 for text in nodes]
+        gap = 0.05
+        available = 0.82
+        total_height = sum(heights) + gap * max(0, n_nodes - 1)
+        if total_height > available and sum(heights) > 0:
+            scale = max(0.60, (available - gap * max(0, n_nodes - 1)) / sum(heights))
+            heights = [max(0.09, h * scale) for h in heights]
+
+        anchors = []
+        cursor = 0.91
+        for height, text in zip(heights, nodes):
+            y = cursor - height / 2.0
+            anchors.append(draw_box_node(ax, 0.50, y, text, width=0.30, height=height, fc="#E6F2FF", ec=color, lw=1.2, fontsize=9.2))
+            cursor -= height + gap
+
+        for i in range(len(anchors) - 1):
+            draw_poly_arrow(ax, [anchors[i]["south"], anchors[i + 1]["north"]], color=color, lw=1.6)
 
     ax.set_title(normalize_disease_text(title), fontsize=12, pad=10, fontweight="bold")
     save_figure(path, fig)
@@ -1746,18 +2300,29 @@ def draw_policy_timeline(path: Path, title: str, events: List[Tuple[str, str]], 
     save_figure(path, fig)
 
 
-def draw_box_node(ax, x: float, y: float, label: str, width: float = 0.28, height: float = 0.12) -> Dict[str, Tuple[float, float]]:
+def draw_box_node(
+    ax,
+    x: float,
+    y: float,
+    label: str,
+    width: float = 0.28,
+    height: float = 0.12,
+    fc: str = "#EDF2F7",
+    ec: str = "#2D3748",
+    lw: float = 1.1,
+    fontsize: float = 9.5,
+) -> Dict[str, Tuple[float, float]]:
     box = FancyBboxPatch(
         (x - width / 2, y - height / 2),
         width,
         height,
         boxstyle="round,pad=0.02",
-        fc="#EDF2F7",
-        ec="#2D3748",
-        lw=1.1,
+        fc=fc,
+        ec=ec,
+        lw=lw,
     )
     ax.add_patch(box)
-    ax.text(x, y, normalize_disease_text(label), ha="center", va="center", fontsize=9.5)
+    ax.text(x, y, normalize_disease_text(label), ha="center", va="center", fontsize=fontsize)
     return {
         "center": (x, y),
         "north": (x, y + height / 2),
@@ -1785,23 +2350,295 @@ def draw_poly_arrow(ax, points: List[Tuple[float, float]], color: str = "#2B6CB0
     )
 
 
+def polyline_point_at(points: List[Tuple[float, float]], frac: float = 0.5) -> Tuple[float, float]:
+    if not points:
+        return (0.5, 0.5)
+    if len(points) == 1:
+        return points[0]
+    frac = max(0.0, min(1.0, frac))
+    seg_lengths: List[float] = []
+    total = 0.0
+    for idx in range(len(points) - 1):
+        x1, y1 = points[idx]
+        x2, y2 = points[idx + 1]
+        seg = max(math.hypot(x2 - x1, y2 - y1), 1e-9)
+        seg_lengths.append(seg)
+        total += seg
+    target = frac * total
+    walked = 0.0
+    for idx, seg in enumerate(seg_lengths):
+        if walked + seg >= target:
+            x1, y1 = points[idx]
+            x2, y2 = points[idx + 1]
+            t = (target - walked) / seg if seg > 0 else 0.0
+            return (x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)
+        walked += seg
+    return points[-1]
+
+
+def draw_configured_network_panel(ax, panel_cfg: Dict[str, object], default_edge_color: str = "#2B6CB0") -> None:
+    nodes_cfg = panel_cfg.get("nodes", [])
+    edges_cfg = panel_cfg.get("edges", [])
+    node_map: Dict[str, Dict[str, Tuple[float, float]]] = {}
+
+    if isinstance(nodes_cfg, list):
+        for node in nodes_cfg:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id", "")).strip()
+            if not node_id:
+                continue
+            x = float(node.get("x", 0.5))
+            y = float(node.get("y", 0.5))
+            width = float(node.get("width", node.get("w", 0.30)))
+            height = float(node.get("height", node.get("h", 0.12)))
+            label_tpl = str(node.get("label", node_id)).strip().replace("\\n", "\n")
+            label = render_disease_template(label_tpl, default=node_id)
+            fc = str(node.get("fc", "#EDF2F7")).strip() or "#EDF2F7"
+            ec = str(node.get("ec", "#2D3748")).strip() or "#2D3748"
+            lw = float(node.get("lw", 1.1))
+            fontsize = float(node.get("fontsize", 9.5))
+            node_map[node_id] = draw_box_node(ax, x, y, label, width=width, height=height, fc=fc, ec=ec, lw=lw, fontsize=fontsize)
+
+    if isinstance(edges_cfg, list):
+        for edge in edges_cfg:
+            if not isinstance(edge, dict):
+                continue
+            src = str(edge.get("from", "")).strip()
+            dst = str(edge.get("to", "")).strip()
+            if src not in node_map or dst not in node_map:
+                continue
+            from_anchor = str(edge.get("from_anchor", "center")).strip() or "center"
+            to_anchor = str(edge.get("to_anchor", "center")).strip() or "center"
+            src_pt = node_map[src].get(from_anchor, node_map[src]["center"])
+            dst_pt = node_map[dst].get(to_anchor, node_map[dst]["center"])
+
+            via_pts: List[Tuple[float, float]] = []
+            raw_via = edge.get("via", [])
+            if isinstance(raw_via, list):
+                for p in raw_via:
+                    if isinstance(p, (list, tuple)) and len(p) >= 2:
+                        via_pts.append((float(p[0]), float(p[1])))
+
+            points = [src_pt] + via_pts + [dst_pt]
+            color = str(edge.get("color", default_edge_color)).strip() or default_edge_color
+            lw = float(edge.get("lw", 1.2))
+            dashed = bool(edge.get("dashed", False))
+            draw_poly_arrow(ax, points, color=color, lw=lw, dashed=dashed)
+
+            sign = str(edge.get("sign", "")).strip()
+            if sign:
+                raw_sign_xy = edge.get("sign_xy")
+                if isinstance(raw_sign_xy, (list, tuple)) and len(raw_sign_xy) >= 2:
+                    sign_x, sign_y = float(raw_sign_xy[0]), float(raw_sign_xy[1])
+                else:
+                    sign_frac = float(edge.get("sign_t", 0.5))
+                    sign_x, sign_y = polyline_point_at(points, sign_frac)
+                    raw_offset = edge.get("sign_offset", [])
+                    if isinstance(raw_offset, (list, tuple)) and len(raw_offset) >= 2:
+                        sign_x += float(raw_offset[0])
+                        sign_y += float(raw_offset[1])
+                bbox = dict(boxstyle="round,pad=0.10", fc="white", ec="none", alpha=0.88) if bool(edge.get("sign_bg", True)) else None
+                ax.text(
+                    sign_x,
+                    sign_y,
+                    sign,
+                    fontsize=float(edge.get("sign_fontsize", 8.5)),
+                    color=color,
+                    fontweight="bold",
+                    ha="center",
+                    va="center",
+                    bbox=bbox,
+                )
+
+    title = render_disease_template(str(panel_cfg.get("title", "")).strip().replace("\\n", "\n"))
+    if title:
+        title_y = float(panel_cfg.get("title_y", 1.02))
+        ax.text(0.5, title_y, title, transform=ax.transAxes, ha="center", va="bottom", fontsize=10, fontweight="bold")
+
+
+
 def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     setup_figure_style()
     fig_rows: List[Dict[str, str]] = []
+    rendered_title_rows: List[Dict[str, str]] = []
+    figure_specs = load_figure_specs()
+
+    def fig_spec(fig_id: str) -> Dict[str, object]:
+        v = figure_specs.get(fig_id, {})
+        return v if isinstance(v, dict) else {}
+
+    def spec_text(fig_id: str, key: str, default: str) -> str:
+        v = fig_spec(fig_id).get(key, default)
+        return render_disease_template(str(v), default=default)
+
+    def spec_list(fig_id: str, key: str, default: List[object]) -> List[object]:
+        v = fig_spec(fig_id).get(key)
+        if isinstance(v, list) and len(v) > 0:
+            return v
+        return default
+
+    def spec_num_list(fig_id: str, key: str, default: List[float]) -> List[float]:
+        v = fig_spec(fig_id).get(key)
+        if isinstance(v, list) and len(v) > 0:
+            out: List[float] = []
+            for x in v:
+                try:
+                    out.append(float(x))
+                except Exception:
+                    return default
+            return out
+        return default
+
+    def spec_matrix(fig_id: str, key: str, default: np.ndarray) -> np.ndarray:
+        v = fig_spec(fig_id).get(key)
+        if not isinstance(v, list) or not v:
+            return default
+        try:
+            arr = np.array(v, dtype=float)
+        except Exception:
+            return default
+        if arr.ndim != 2 or arr.shape != default.shape:
+            return default
+        return arr
+
+    def specific_public_data_source(fig_id: str) -> str | None:
+        profile = active_profile_id()
+        if profile == "sciatica":
+            mapping = {
+                "fig_1_1": "NICE/NASS/AANS疾病定义与分型资料",
+                "fig_1_2": "WHO/NICE/神经根炎症公开研究",
+                "fig_1_3": "NASS/系统综述/疼痛敏化研究",
+                "fig_1_4": "WHO/GBD/国家卫健委公开资料",
+                "fig_2_1": "NICE/AANS/康复系统综述",
+                "fig_2_2": "NICE/红旗征评估/预后系统综述",
+                "fig_2_3": "NICE/AANS/系统综述等公开资料",
+                "fig_3_1": "NICE/NASS/AANS诊断路径资料",
+                "fig_3_2": "NICE/NASS/Cochrane/随机对照研究",
+                "fig_3_3": "针刺随机对照研究/康复系统综述",
+                "fig_5_1": "国家统计局/国家卫健委/职业负荷公开研究",
+                "fig_5_2": "NICE/NASS指南与临床路径公开文献",
+                "fig_5_3": "身体活动指南/康复依从性系统综述",
+                "fig_5_4": "依从性研究/康复随访公开研究",
+                "fig_7_2": "国家统计局/国家医保局/米内网/公开竞争情报",
+            }
+            return mapping.get(str(fig_id).strip())
+        return None
+
+    def specific_public_source_line(fig_id: str) -> str | None:
+        profile = active_profile_id()
+        if profile == "sciatica":
+            mapping = {
+                "fig_1_1": "数据来源：NICE NG59、NASS腰椎间盘突出伴神经根病指南、AANS疾病教育资料整理",
+                "fig_1_2": "数据来源：WHO《Musculoskeletal conditions》、NICE NG59、神经根炎症与疼痛敏化公开研究整理",
+                "fig_1_3": "数据来源：StatPearls《Sciatica》、NASS指南及疼痛敏化系统综述整理",
+                "fig_1_4": "数据来源：WHO《Musculoskeletal conditions》、GBD相关负担资料及国家卫健委公开资料整理",
+                "fig_2_1": "数据来源：NICE NG59、AANS疾病科普、国家卫健委《身体活动指南》及康复系统综述整理",
+                "fig_2_2": "数据来源：NICE NG59、红旗征识别公开文献、慢性腰腿痛预后系统综述整理",
+                "fig_2_3": "数据来源：NICE NG59、AANS疾病科普、国家卫健委《身体活动指南》及物理治疗系统综述等公开资料整理",
+                "fig_3_1": "数据来源：NICE NG59、NASS腰椎间盘突出伴神经根病指南、AANS临床教育资料整理",
+                "fig_3_2": "数据来源：NICE NG59、NASS指南、Cochrane系统综述及随机对照研究整理",
+                "fig_3_3": "数据来源：针刺随机对照研究、康复训练系统综述及中西协同公开文献整理",
+                "fig_5_1": "数据来源：国家统计局人口年龄结构、国家卫健委慢性疼痛相关资料及职业人群腰背痛公开研究整理",
+                "fig_5_2": "数据来源：NICE NG59、NASS指南及骨科/疼痛科/康复科诊疗路径公开文献整理",
+                "fig_5_3": "数据来源：国家卫健委《身体活动指南》、康复依从性系统综述及患者教育公开资料整理",
+                "fig_5_4": "数据来源：慢性腰痛/坐骨神经痛依从性研究及康复随访公开研究整理",
+                "fig_7_2": "数据来源：国家统计局、国家卫健委、国家医保局、米内网项目数据及公开竞争情报整理",
+            }
+            return mapping.get(str(fig_id).strip())
+        return None
+
+    def default_public_data_source(fig_id: str) -> str:
+        specific = specific_public_data_source(fig_id)
+        if specific:
+            return specific
+        chapter = 0
+        try:
+            chapter = int(str(fig_id).split("_")[1])
+        except Exception:
+            chapter = 0
+        profile = active_profile_id()
+        if profile == "sciatica":
+            mapping = {
+                1: "WHO/NICE/NASS等公开资料",
+                2: "NICE/AANS/系统综述等公开资料",
+                3: "NICE/NASS/AANS/随机对照研究等公开资料",
+                5: "国家统计局/国家医保局/公开研究",
+                6: "国家医保局/国家卫健委/国家药监局",
+                7: "国家统计局/国家卫健委/米内网/公开研究",
+            }
+            return mapping.get(chapter, "公开资料整理")
+        return "公开资料整理"
+
+    def default_public_source_line(fig_id: str, fallback: str) -> str:
+        specific = specific_public_source_line(fig_id)
+        if specific:
+            return specific
+        chapter = 0
+        try:
+            chapter = int(str(fig_id).split("_")[1])
+        except Exception:
+            chapter = 0
+        profile = active_profile_id()
+        if profile == "sciatica":
+            mapping = {
+                1: "数据来源：WHO《Musculoskeletal conditions》、NICE NG59、NASS腰椎间盘突出伴神经根病指南等公开资料整理",
+                2: "数据来源：NICE NG59、AANS疾病科普、国家卫健委《身体活动指南》及物理治疗系统综述等公开资料整理",
+                3: "数据来源：NICE NG59、NASS指南、AANS资料及针刺/物理治疗公开研究整理",
+                5: "数据来源：国家统计局、国家医保局、国家卫健委及公开研究资料整理",
+                6: "数据来源：国家医保局、国家卫健委、国家药监局法规与政策文件整理",
+                7: "数据来源：国家统计局、国家卫健委、米内网项目数据及公开研究资料整理",
+            }
+            return mapping.get(chapter, fallback)
+        return fallback
 
     def add_fig_meta(fig_id: str, caption: str, fig_type: str, data_source: str, table_src: str, excel_table: str, block_id: str, rule_tag: str, source_line: str):
+        caption_text = spec_text(fig_id, "caption", caption)
+        default_source_line = source_line
+        default_data_source = data_source
+        specific_source = specific_public_source_line(fig_id)
+        specific_data = specific_public_data_source(fig_id)
+        if specific_source:
+            default_source_line = specific_source
+        elif "公开资料整理" in str(source_line):
+            default_source_line = default_public_source_line(fig_id, source_line)
+        if specific_data:
+            default_data_source = specific_data
+        elif str(data_source).strip() == "公开资料整理":
+            default_data_source = default_public_data_source(fig_id)
+        source_text = spec_text(fig_id, "source_line", default_source_line)
         fig_rows.append(
             {
                 "fig_id": fig_id,
-                "caption": caption,
+                "caption": caption_text,
                 "type": fig_type,
-                "data_source": data_source,
+                "data_source": default_data_source,
                 "数据表来源": table_src,
                 "excel_sheet_or_table": excel_table,
                 "输出文件名": f"{fig_id}.png",
                 "插入到哪个block之后": block_id,
                 "规则标签": rule_tag,
-                "source_line": source_line,
+                "source_line": source_text,
+            }
+        )
+
+    def set_main_title(ax, fig_id: str, title: str, **kwargs):
+        txt = spec_text(fig_id, "title", title)
+        ax.set_title(txt, **kwargs)
+        rendered_title_rows.append(
+            {
+                "fig_id": fig_id,
+                "rendered_title": txt,
+            }
+        )
+
+    def set_main_suptitle(fig, fig_id: str, title: str, **kwargs):
+        txt = spec_text(fig_id, "title", title)
+        fig.suptitle(txt, **kwargs)
+        rendered_title_rows.append(
+            {
+                "fig_id": fig_id,
+                "rendered_title": txt,
             }
         )
 
@@ -1815,6 +2652,15 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         flow_nodes = ["椎间盘退变", "椎体边缘骨赘", "椎管/椎间孔狭窄", "神经结构受压", "疼痛与功能障碍"]
         drivers = ["老龄化与久坐", "影像筛查普及", "康复需求", "门诊量增长", "指南更新"]
         score = [82, 71, 78, 69, 74]
+    elif is_gastritis_profile():
+        cls = ["Hp相关胃炎", "NSAIDs相关", "胆汁反流相关", "自身免疫相关", "其他病因"]
+        vals = [42, 18, 15, 9, 16]
+        stages = ["非萎缩期", "萎缩期", "肠化期", "异型增生风险期"]
+        means = [44, 56, 68, 77]
+        flow_title = f"{DISEASE_NAME}病理演进链路"
+        flow_nodes = ["病因暴露", "慢性炎症", "腺体萎缩", "肠上皮化生", "风险升级"]
+        drivers = ["中老年人群", "Hp感染管理", "胃镜筛查覆盖", "院外长期用药", "指南更新"]
+        score = [79, 74, 71, 65, 72]
     elif is_respiratory_profile():
         cls = ["急性咳嗽", "迁延性咳嗽", "慢性咳嗽", "痰液黏稠型", "痉咳伴喘型"]
         vals = [28, 24, 16, 18, 14]
@@ -1834,29 +2680,45 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         drivers = ["人口结构变化", "就医需求", "院外管理", "数字触达", "指南更新"]
         score = [68, 73, 70, 62, 66]
 
+    cls = [str(x) for x in spec_list("fig_1_1", "categories", cls)]
+    vals = spec_num_list("fig_1_1", "values", [float(x) for x in vals])
+    if len(cls) != len(vals):
+        cls, vals = cls[: min(len(cls), len(vals))], vals[: min(len(cls), len(vals))]
     fig, ax = plt.subplots(figsize=(7.8, 4.5))
     ax.bar(cls, vals, color=["#2B6CB0", "#3182CE", "#63B3ED", "#90CDF4", "#BEE3F8"])
     ax.set_ylabel("占比（%）")
-    ax.set_title(f"{DISEASE_NAME}临床分型结构")
+    set_main_title(ax, "fig_1_1", f"图表1-1：{DISEASE_NAME}临床分型结构")
     save_figure(FIG_DIR / "fig_1_1.png", fig)
     add_fig_meta("fig_1_1", f"图表1-1：{DISEASE_NAME}临床分型结构", "柱状图", "公开资料整理", "分型结构整理", "N/A", "1.1", "分型框架", "数据来源：公开资料整理")
 
+    stages = [str(x) for x in spec_list("fig_1_2", "x_labels", stages)]
+    means = spec_num_list("fig_1_2", "values", [float(x) for x in means])
+    if len(stages) != len(means):
+        stages, means = stages[: min(len(stages), len(means))], means[: min(len(stages), len(means))]
     fig, ax = plt.subplots(figsize=(7.8, 4.5))
     ax.plot(stages, means, marker="o", color="#2F855A", lw=2)
     ax.fill_between(stages, means, [min(means) - 12] * len(stages), color="#9AE6B4", alpha=0.35)
     ax.set_ylabel("症状负担指数")
-    ax.set_title(f"{DISEASE_NAME}病程分期与症状负担变化")
+    set_main_title(ax, "fig_1_2", f"图表1-2：{DISEASE_NAME}病程分期与症状负担变化")
     save_figure(FIG_DIR / "fig_1_2.png", fig)
     add_fig_meta("fig_1_2", f"图表1-2：{DISEASE_NAME}病程分期与症状负担变化", "折线图", "公开资料整理", "病程管理要点", "N/A", "1.2", "机制链路", "数据来源：公开资料整理")
 
-    draw_simple_flow(FIG_DIR / "fig_1_3.png", flow_title, flow_nodes, direction="lr", color="#2C5282", figsize=(9.6, 3.2))
-    add_fig_meta("fig_1_3", f"图表1-3：{DISEASE_NAME}病理生理演进路径", "流程图", "公开资料整理", "机制链路", "N/A", "1.2", "机制路径", "数据来源：公开资料整理")
+    flow_title = spec_text("fig_1_3", "flow_title", flow_title)
+    flow_nodes = [str(x) for x in spec_list("fig_1_3", "nodes", flow_nodes)]
+    title_1_3 = compose_figure_title("1-3", flow_title)
+    draw_simple_flow(FIG_DIR / "fig_1_3.png", title_1_3, flow_nodes, direction="lr", color="#2C5282", figsize=(9.6, 3.2))
+    rendered_title_rows.append({"fig_id": "fig_1_3", "rendered_title": normalize_disease_text(title_1_3)})
+    add_fig_meta("fig_1_3", title_1_3, "流程图", "公开资料整理", "机制链路", "N/A", "1.2", "机制路径", "数据来源：公开资料整理")
 
+    drivers = [str(x) for x in spec_list("fig_1_4", "categories", drivers)]
+    score = spec_num_list("fig_1_4", "values", [float(x) for x in score])
+    if len(drivers) != len(score):
+        drivers, score = drivers[: min(len(drivers), len(score))], score[: min(len(drivers), len(score))]
     fig, ax = plt.subplots(figsize=(7.8, 4.4))
     ax.barh(drivers, score, color="#805AD5")
     ax.set_xlim(0, 100)
     ax.set_xlabel("驱动强度指数")
-    ax.set_title(f"{DISEASE_NAME}市场需求驱动强度")
+    set_main_title(ax, "fig_1_4", f"图表1-4：{DISEASE_NAME}市场需求驱动强度")
     save_figure(FIG_DIR / "fig_1_4.png", fig)
     add_fig_meta("fig_1_4", f"图表1-4：{DISEASE_NAME}市场需求驱动强度", "条形图", "公开资料整理", "需求驱动评分", "N/A", "1.3", "需求结构", "数据来源：公开资料整理")
 
@@ -1884,6 +2746,51 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
             ("内分泌代谢", "肌肉骨骼系统", 0.18),
             ("心理行为", "神经系统", 0.14),
         ]
+    elif is_gastritis_profile():
+        systems = ["消化系统", "免疫系统", "神经系统", "内分泌系统", "胃肠微生态", "血液系统"]
+        influence = [94, 82, 68, 63, 71, 56]
+        xlabels = ["溃疡风险", "贫血风险", "体重下降", "癌前病变", "复发负担"]
+        ylabels = ["低风险", "中风险", "高风险"]
+        matrix = np.array([[0.28, 0.22, 0.26, 0.18, 0.24], [0.47, 0.44, 0.43, 0.39, 0.46], [0.25, 0.34, 0.31, 0.43, 0.30]])
+        pos = {
+            "神经系统": (0.20, 0.78),
+            "内分泌系统": (0.50, 0.78),
+            "免疫系统": (0.80, 0.78),
+            "消化系统": (0.20, 0.28),
+            "血液系统": (0.50, 0.28),
+            "胃肠微生态": (0.80, 0.28),
+        }
+        edges = [
+            ("免疫系统", "消化系统", 0.12),
+            ("内分泌系统", "消化系统", -0.10),
+            ("消化系统", "血液系统", 0.08),
+            ("消化系统", "胃肠微生态", -0.10),
+            ("神经系统", "消化系统", -0.14),
+            ("胃肠微生态", "内分泌系统", 0.10),
+            ("血液系统", "神经系统", 0.06),
+        ]
+    elif is_sciatica_profile():
+        systems = ["神经系统", "肌肉骨骼系统", "炎症免疫系统", "睡眠系统", "心理行为系统", "运动功能系统"]
+        influence = [94, 89, 76, 68, 62, 84]
+        xlabels = ["慢性神经痛", "肌力下降", "睡眠障碍", "运动回避", "复诊负担"]
+        ylabels = ["低风险", "中风险", "高风险"]
+        matrix = np.array([[0.24, 0.18, 0.21, 0.22, 0.19], [0.49, 0.46, 0.43, 0.44, 0.41], [0.27, 0.36, 0.36, 0.34, 0.40]])
+        pos = {
+            "神经系统": (0.18, 0.78),
+            "肌肉骨骼系统": (0.50, 0.78),
+            "炎症免疫系统": (0.82, 0.78),
+            "睡眠系统": (0.18, 0.28),
+            "心理行为系统": (0.50, 0.28),
+            "运动功能系统": (0.82, 0.28),
+        }
+        edges = [
+            ("神经系统", "睡眠系统", -0.10, "±"),
+            ("神经系统", "心理行为系统", 0.06, "+"),
+            ("肌肉骨骼系统", "运动功能系统", 0.00, "+"),
+            ("炎症免疫系统", "神经系统", -0.10, "+"),
+            ("睡眠系统", "心理行为系统", -0.08, "±"),
+            ("心理行为系统", "运动功能系统", 0.08, "±"),
+        ]
     elif is_respiratory_profile():
         systems = ["呼吸系统", "免疫系统", "消化系统", "神经系统", "内分泌系统", "肌肉骨骼系统"]
         influence = [92, 81, 63, 58, 46, 34]
@@ -1899,45 +2806,60 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
             "肌肉骨骼系统": (0.80, 0.28),
         }
         edges = [
-            ("神经系统", "呼吸系统", 0.0),
-            ("内分泌系统", "呼吸系统", -0.18),
-            ("免疫系统", "呼吸系统", 0.18),
-            ("免疫系统", "消化系统", -0.12),
-            ("内分泌系统", "消化系统", 0.10),
-            ("神经系统", "肌肉骨骼系统", 0.16),
-            ("消化系统", "免疫系统", -0.18),
+            ("神经系统", "呼吸系统", 0.0, "±"),
+            ("内分泌系统", "呼吸系统", -0.18, "±"),
+            ("免疫系统", "呼吸系统", 0.18, "+"),
+            ("免疫系统", "消化系统", -0.12, "+"),
+            ("内分泌系统", "消化系统", 0.10, "±"),
+            ("神经系统", "肌肉骨骼系统", 0.16, "+"),
+            ("消化系统", "免疫系统", -0.18, "±"),
         ]
     else:
-        systems = ["免疫系统", "代谢系统", "神经系统", "心血管系统", "消化系统", "肾脏系统"]
-        influence = [86, 78, 71, 67, 58, 53]
-        xlabels = ["急性加重", "功能受损", "反复就诊", "依从下降", "生活质量下降"]
+        systems = ["神经系统", "内分泌系统", "免疫系统", "睡眠系统", "心血管系统", "消化系统"]
+        influence = [86, 78, 74, 69, 64, 58]
+        xlabels = ["急性加重", "睡眠受损", "自主神经症状", "反复就诊", "生活质量下降"]
         ylabels = ["低风险", "中风险", "高风险"]
         matrix = np.array([[0.31, 0.29, 0.26, 0.30, 0.25], [0.48, 0.44, 0.41, 0.45, 0.39], [0.21, 0.27, 0.33, 0.25, 0.36]])
         pos = {
             "神经系统": (0.20, 0.78),
-            "代谢系统": (0.50, 0.78),
+            "内分泌系统": (0.50, 0.78),
             "免疫系统": (0.80, 0.78),
-            "心血管系统": (0.20, 0.28),
-            "消化系统": (0.50, 0.28),
-            "肾脏系统": (0.80, 0.28),
+            "睡眠系统": (0.20, 0.28),
+            "心血管系统": (0.50, 0.28),
+            "消化系统": (0.80, 0.28),
         }
         edges = [
-            ("代谢系统", "心血管系统", 0.08),
-            ("免疫系统", "代谢系统", -0.12),
-            ("神经系统", "代谢系统", 0.16),
-            ("免疫系统", "消化系统", -0.08),
-            ("消化系统", "肾脏系统", 0.10),
-            ("心血管系统", "肾脏系统", -0.15),
-            ("神经系统", "心血管系统", 0.02),
+            ("神经系统", "睡眠系统", -0.10, "±"),
+            ("内分泌系统", "睡眠系统", -0.08, "±"),
+            ("内分泌系统", "心血管系统", 0.08, "±"),
+            ("神经系统", "心血管系统", 0.06, "±"),
+            ("免疫系统", "消化系统", -0.08, "+"),
         ]
 
+    systems = [str(x) for x in spec_list("fig_2_1", "categories", systems)]
+    influence = spec_num_list("fig_2_1", "values", [float(x) for x in influence])
+    if len(systems) != len(influence):
+        systems, influence = systems[: min(len(systems), len(influence))], influence[: min(len(systems), len(influence))]
     fig, ax = plt.subplots(figsize=(7.8, 4.4))
     ax.bar(systems, influence, color="#2C7A7B")
     ax.set_ylabel("关联强度（0-100）")
-    ax.set_title(f"{DISEASE_NAME}与相关系统关联强度")
+    set_main_title(ax, "fig_2_1", f"图表2-1：{DISEASE_NAME}与相关系统关联强度")
     save_figure(FIG_DIR / "fig_2_1.png", fig)
     add_fig_meta("fig_2_1", f"图表2-1：{DISEASE_NAME}与相关系统关联强度", "柱状图", "公开资料整理", "系统关联评分", "N/A", "2.1", "系统关联", "数据来源：公开资料整理")
 
+    xlabels = [str(x) for x in spec_list("fig_2_2", "x_labels", xlabels)]
+    ylabels = [str(x) for x in spec_list("fig_2_2", "y_labels", ylabels)]
+    matrix_default = matrix.copy()
+    matrix_v = fig_spec("fig_2_2").get("matrix")
+    if isinstance(matrix_v, list) and matrix_v:
+        try:
+            m_arr = np.array(matrix_v, dtype=float)
+            if m_arr.ndim == 2 and m_arr.shape[0] == len(ylabels) and m_arr.shape[1] == len(xlabels):
+                matrix = m_arr
+            else:
+                matrix = matrix_default
+        except Exception:
+            matrix = matrix_default
     fig, ax = plt.subplots(figsize=(7.8, 4.5))
     im = ax.imshow(matrix, cmap="YlOrRd", aspect="auto")
     ax.set_xticks(np.arange(len(xlabels)))
@@ -1947,13 +2869,77 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     for i in range(matrix.shape[0]):
         for j in range(matrix.shape[1]):
             ax.text(j, i, f"{matrix[i, j]*100:.0f}%", ha="center", va="center", fontsize=8)
-    ax.set_title("常见并发风险矩阵")
+    set_main_title(ax, "fig_2_2", "图表2-2：常见并发风险矩阵")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     save_figure(FIG_DIR / "fig_2_2.png", fig)
     add_fig_meta("fig_2_2", "图表2-2：常见并发风险矩阵", "热力图", "公开资料整理", "并发风险评分", "N/A", "2.2", "风险矩阵", "数据来源：公开资料整理")
 
-    if is_cervical_profile():
-        # Split into two sub-flows to avoid line crossover and text overlap.
+    fig23_title = fig23_expected_caption()
+    if fig23_layout_mode() == "causal_chain":
+        fig, ax = plt.subplots(figsize=(11.0, 5.8))
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+
+        ax.text(0.5, 0.95, "病因与调节层", ha="center", va="center", fontsize=10, color="#2D3748")
+        ax.text(0.5, 0.73, "核心病理层", ha="center", va="center", fontsize=10, color="#2D3748")
+        ax.text(0.5, 0.47, "机制传导层", ha="center", va="center", fontsize=10, color="#2D3748")
+        ax.text(0.5, 0.18, "临床后果层", ha="center", va="center", fontsize=10, color="#2D3748")
+
+        nodes = {
+            "Hp感染": draw_box_node(ax, 0.12, 0.85, "Hp感染", width=0.16, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=9.2),
+            "化学/药物刺激": draw_box_node(ax, 0.30, 0.85, "化学/药物刺激", width=0.18, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=9.2),
+            "胃肠微生态失衡": draw_box_node(ax, 0.48, 0.85, "胃肠微生态失衡", width=0.18, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=9.2),
+            "神经系统": draw_box_node(ax, 0.66, 0.85, "神经系统\n(脑-肠轴)", width=0.16, height=0.095, fc="#EBF8FF", ec="#2B6CB0", fontsize=9.0),
+            "内分泌系统": draw_box_node(ax, 0.84, 0.85, "内分泌系统", width=0.16, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=9.2),
+            "免疫系统": draw_box_node(ax, 0.28, 0.66, "免疫系统", width=0.14, height=0.085, fc="#E6FFFA", ec="#2C7A7B", fontsize=9.2),
+            "核心": draw_box_node(ax, 0.50, 0.66, "慢性胃炎\n(胃黏膜炎症)", width=0.22, height=0.10, fc="#FEEBC8", ec="#C05621", fontsize=9.8),
+            "黏膜屏障": draw_box_node(ax, 0.72, 0.66, "胃黏膜屏障受损", width=0.18, height=0.085, fc="#FEEBC8", ec="#C05621", fontsize=9.1),
+            "酸动力": draw_box_node(ax, 0.34, 0.42, "胃酸/胃动力异常", width=0.18, height=0.085, fc="#FFF5F5", ec="#C53030", fontsize=9.1),
+            "炎症持续": draw_box_node(ax, 0.50, 0.42, "慢性炎症持续", width=0.16, height=0.085, fc="#FFF5F5", ec="#C53030", fontsize=9.1),
+            "修复障碍": draw_box_node(ax, 0.66, 0.42, "黏膜修复障碍", width=0.16, height=0.085, fc="#FFF5F5", ec="#C53030", fontsize=9.1),
+            "症状负担": draw_box_node(ax, 0.28, 0.12, "症状负担", width=0.14, height=0.08, fc="#FAF5FF", ec="#6B46C1", fontsize=9.0),
+            "营养/贫血风险": draw_box_node(ax, 0.50, 0.12, "营养吸收受限\n/贫血风险", width=0.20, height=0.09, fc="#FAF5FF", ec="#6B46C1", fontsize=8.8),
+            "癌前病变风险": draw_box_node(ax, 0.72, 0.12, "癌前病变风险", width=0.16, height=0.08, fc="#FAF5FF", ec="#6B46C1", fontsize=9.0),
+        }
+
+        # 病因与调节 -> 核心病理
+        draw_poly_arrow(ax, [nodes["Hp感染"]["south"], nodes["核心"]["north"]], color="#2B6CB0")
+        draw_poly_arrow(ax, [nodes["化学/药物刺激"]["south"], nodes["核心"]["north"]], color="#2B6CB0")
+        draw_poly_arrow(ax, [nodes["胃肠微生态失衡"]["south"], nodes["核心"]["north"]], color="#2B6CB0")
+        draw_poly_arrow(ax, [nodes["免疫系统"]["east"], nodes["核心"]["west"]], color="#2C7A7B")
+        draw_poly_arrow(ax, [nodes["核心"]["west"], nodes["免疫系统"]["east"]], color="#2C7A7B", dashed=True)
+        draw_poly_arrow(ax, [nodes["神经系统"]["south"], (0.60, 0.74), nodes["核心"]["north"]], color="#2B6CB0")
+        draw_poly_arrow(ax, [nodes["核心"]["north"], (0.58, 0.79), nodes["神经系统"]["south"]], color="#2B6CB0", dashed=True)
+        draw_poly_arrow(ax, [nodes["内分泌系统"]["south"], (0.78, 0.74), nodes["核心"]["north"]], color="#2B6CB0")
+        draw_poly_arrow(ax, [nodes["核心"]["north"], (0.74, 0.79), nodes["内分泌系统"]["south"]], color="#2B6CB0", dashed=True)
+
+        # 核心病理 -> 机制传导
+        draw_poly_arrow(ax, [nodes["核心"]["east"], nodes["黏膜屏障"]["west"]], color="#C05621")
+        draw_poly_arrow(ax, [nodes["核心"]["south"], nodes["炎症持续"]["north"]], color="#C05621")
+        draw_poly_arrow(ax, [nodes["核心"]["south"], (0.40, 0.50), nodes["酸动力"]["north"]], color="#C05621")
+        draw_poly_arrow(ax, [nodes["黏膜屏障"]["south"], nodes["修复障碍"]["north"]], color="#C05621")
+
+        # 机制传导 -> 临床后果
+        draw_poly_arrow(ax, [nodes["酸动力"]["south"], nodes["症状负担"]["north"]], color="#C53030")
+        draw_poly_arrow(ax, [nodes["炎症持续"]["south"], nodes["营养/贫血风险"]["north"]], color="#C53030")
+        draw_poly_arrow(ax, [nodes["修复障碍"]["south"], nodes["癌前病变风险"]["north"]], color="#C53030")
+
+        # 关系符号标注（+ 促进, ± 双向调节）
+        ax.text(0.20, 0.77, "+", fontsize=10, color="#2B6CB0", fontweight="bold")
+        ax.text(0.36, 0.77, "+", fontsize=10, color="#2B6CB0", fontweight="bold")
+        ax.text(0.52, 0.77, "+", fontsize=10, color="#2B6CB0", fontweight="bold")
+        ax.text(0.39, 0.66, "±", fontsize=10, color="#2C7A7B", fontweight="bold")
+        ax.text(0.60, 0.77, "±", fontsize=10, color="#2B6CB0", fontweight="bold")
+        ax.text(0.76, 0.77, "±", fontsize=10, color="#2B6CB0", fontweight="bold")
+        ax.text(0.60, 0.66, "+", fontsize=10, color="#C05621", fontweight="bold")
+        ax.text(0.50, 0.53, "+", fontsize=10, color="#C05621", fontweight="bold")
+        ax.text(0.43, 0.32, "+", fontsize=10, color="#C53030", fontweight="bold")
+        ax.text(0.56, 0.32, "+", fontsize=10, color="#C53030", fontweight="bold")
+        ax.text(0.72, 0.32, "+", fontsize=10, color="#C53030", fontweight="bold")
+
+        set_main_title(ax, "fig_2_3", fig23_title, fontsize=12, fontweight="bold")
+    elif fig23_layout_mode() == "dual_panel":
         fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8))
         ax_l, ax_r = axes
         for ax in axes:
@@ -1961,78 +2947,124 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
             ax.set_ylim(0, 1)
             ax.axis("off")
 
-        left_nodes = {
-            "神经系统": draw_box_node(ax_l, 0.24, 0.78, "神经系统", width=0.30),
-            "肌肉骨骼系统": draw_box_node(ax_l, 0.76, 0.78, "肌肉骨骼系统", width=0.34),
-            "血管系统": draw_box_node(ax_l, 0.24, 0.30, "血管系统", width=0.30),
-            "内分泌代谢": draw_box_node(ax_l, 0.76, 0.30, "内分泌代谢", width=0.30),
-        }
-        draw_poly_arrow(ax_l, [left_nodes["血管系统"]["north"], left_nodes["神经系统"]["south"]])
-        draw_poly_arrow(ax_l, [left_nodes["内分泌代谢"]["north"], left_nodes["肌肉骨骼系统"]["south"]])
-        draw_poly_arrow(
-            ax_l,
-            [
-                left_nodes["神经系统"]["east"],
-                (0.50, 0.90),
-                (left_nodes["肌肉骨骼系统"]["west"][0], 0.90),
-                left_nodes["肌肉骨骼系统"]["west"],
-            ],
-        )
-        draw_poly_arrow(
-            ax_l,
-            [
-                left_nodes["血管系统"]["east"],
-                (0.50, left_nodes["血管系统"]["east"][1]),
-                (0.50, 0.56),
-                (left_nodes["肌肉骨骼系统"]["west"][0], 0.56),
-                left_nodes["肌肉骨骼系统"]["west"],
-            ],
-        )
-        ax_l.set_title("结构-供血-受压链路", fontsize=10, fontweight="bold", pad=6)
-
-        right_nodes = {
-            "神经系统": draw_box_node(ax_r, 0.50, 0.78, "神经系统", width=0.30),
-            "睡眠系统": draw_box_node(ax_r, 0.22, 0.30, "睡眠系统", width=0.30),
-            "心理行为": draw_box_node(ax_r, 0.78, 0.30, "心理行为", width=0.30),
-        }
-        draw_poly_arrow(ax_r, [right_nodes["神经系统"]["south"], (0.34, 0.56), right_nodes["睡眠系统"]["north"]])
-        draw_poly_arrow(ax_r, [right_nodes["神经系统"]["south"], (0.66, 0.56), right_nodes["心理行为"]["north"]])
-        draw_poly_arrow(
-            ax_r,
-            [
-                right_nodes["睡眠系统"]["east"],
-                (0.50, right_nodes["睡眠系统"]["east"][1]),
-                (0.50, 0.14),
-                (right_nodes["心理行为"]["west"][0], 0.14),
-                right_nodes["心理行为"]["west"],
-            ],
-        )
-        draw_poly_arrow(
-            ax_r,
-            [
-                right_nodes["心理行为"]["north"],
-                (0.92, 0.56),
-                (0.92, 0.92),
-                (right_nodes["神经系统"]["east"][0], 0.92),
-                right_nodes["神经系统"]["east"],
-            ],
-            dashed=True,
-        )
-        ax_r.set_title("症状-睡眠-心理反馈环", fontsize=10, fontweight="bold", pad=6)
-        fig.suptitle(f"图表2-3：{DISEASE_NAME}相关系统关系图（分层布局）", fontsize=12, fontweight="bold", y=0.98)
+        panel_cfg = fig23_dual_panel_config()
+        left_cfg = panel_cfg.get("left", {}) if isinstance(panel_cfg, dict) else {}
+        right_cfg = panel_cfg.get("right", {}) if isinstance(panel_cfg, dict) else {}
+        if isinstance(left_cfg, dict):
+            draw_configured_network_panel(ax_l, left_cfg, default_edge_color="#2B6CB0")
+        if isinstance(right_cfg, dict):
+            draw_configured_network_panel(ax_r, right_cfg, default_edge_color="#2B6CB0")
+        set_main_suptitle(fig, "fig_2_3", fig23_title, fontsize=12, fontweight="bold", y=0.98)
     else:
         fig, ax = plt.subplots(figsize=(8.2, 4.8))
         ax.axis("off")
+        fig23_cfg = fig_spec("fig_2_3")
+        disallow_terms = fig23_disallow_nodes()
+        extra_disallow = fig23_cfg.get("disallow_nodes")
+        if isinstance(extra_disallow, list):
+            disallow_terms.extend([str(x).strip() for x in extra_disallow if str(x).strip()])
+        pos_cfg = fig23_cfg.get("pos")
+        if isinstance(pos_cfg, dict):
+            new_pos: Dict[str, Tuple[float, float]] = {}
+            for k, v in pos_cfg.items():
+                if not isinstance(v, (list, tuple)) or len(v) < 2:
+                    continue
+                try:
+                    new_pos[str(k)] = (float(v[0]), float(v[1]))
+                except Exception:
+                    continue
+            if new_pos:
+                pos = new_pos
+        edges_cfg = fig23_cfg.get("edges")
+        if isinstance(edges_cfg, list):
+            new_edges = []
+            for e in edges_cfg:
+                if not isinstance(e, (list, tuple)) or len(e) < 3:
+                    continue
+                try:
+                    src = str(e[0]).strip()
+                    dst = str(e[1]).strip()
+                    rad = float(e[2])
+                    sign = str(e[3]).strip() if len(e) >= 4 else ""
+                    if src and dst:
+                        new_edges.append((src, dst, rad, sign))
+                except Exception:
+                    continue
+            if new_edges:
+                edges = new_edges
+        systems = [x for x in systems if x not in disallow_terms]
+        for term in disallow_terms:
+            if term in pos:
+                pos.pop(term, None)
+        filtered_edges = []
+        for e in edges:
+            s, t, rad = e[0], e[1], e[2]
+            sign = e[3] if len(e) >= 4 else ""
+            if s in disallow_terms or t in disallow_terms:
+                continue
+            if s not in pos or t not in pos:
+                continue
+            filtered_edges.append((s, t, rad, sign))
+
+        core_drawn = False
+        if fig23_require_core_node():
+            core_pos = (0.50, 0.53)
+            core_drawn = True
+            core_label = fig23_core_label()
+            cfg_core_label = fig23_cfg.get("core_label")
+            if cfg_core_label is not None:
+                core_label = render_disease_template(str(cfg_core_label), default=core_label)
+            ax.text(
+                core_pos[0],
+                core_pos[1],
+                core_label,
+                ha="center",
+                va="center",
+                fontsize=9.2,
+                bbox=dict(boxstyle="round,pad=0.36", fc="#FEEBC8", ec="#C05621", lw=1.2),
+            )
+            top_links = [n for n in fig23_top_to_core_nodes() if n in pos]
+            cfg_top = fig23_cfg.get("top_to_core")
+            if isinstance(cfg_top, list) and cfg_top:
+                top_links = [str(x).strip() for x in cfg_top if str(x).strip() in pos]
+            for n in top_links:
+                x1, y1 = pos[n]
+                ax.annotate(
+                    "",
+                    xy=(core_pos[0], core_pos[1] + 0.07),
+                    xytext=(x1, y1 - 0.06),
+                    arrowprops=dict(arrowstyle="->", lw=1.1, color="#2B6CB0", connectionstyle="arc3,rad=0.0"),
+                )
+                ax.text((x1 + core_pos[0]) / 2, (y1 + core_pos[1]) / 2 + 0.03, "±", fontsize=8.5, color="#2B6CB0", fontweight="bold")
+            bottom_links = [n for n in fig23_core_to_bottom_nodes() if n in pos]
+            cfg_bottom = fig23_cfg.get("core_to_bottom")
+            if isinstance(cfg_bottom, list) and cfg_bottom:
+                bottom_links = [str(x).strip() for x in cfg_bottom if str(x).strip() in pos]
+            for n in bottom_links:
+                x2, y2 = pos[n]
+                ax.annotate(
+                    "",
+                    xy=(x2, y2 + 0.06),
+                    xytext=(core_pos[0], core_pos[1] - 0.07),
+                    arrowprops=dict(arrowstyle="->", lw=1.1, color="#2B6CB0", connectionstyle="arc3,rad=0.0"),
+                )
+                ax.text((x2 + core_pos[0]) / 2, (y2 + core_pos[1]) / 2 - 0.03, "+", fontsize=8.5, color="#2B6CB0", fontweight="bold")
+
         for name, (x, y) in pos.items():
             ax.text(x, y, name, ha="center", va="center", fontsize=10, bbox=dict(boxstyle="round,pad=0.35", fc="#EDF2F7", ec="#2D3748", lw=1.1))
-        for s, t, rad in edges:
+        for s, t, rad, sign in filtered_edges:
             x1, y1 = pos[s]
             x2, y2 = pos[t]
             ax.annotate("", xy=(x2, y2 + 0.06), xytext=(x1, y1 - 0.06), arrowprops=dict(arrowstyle="->", lw=1.2, color="#2B6CB0", connectionstyle=f"arc3,rad={rad}"))
-        ax.set_title(f"图表2-3：{DISEASE_NAME}相关系统关系图（分层布局）", fontsize=12, fontweight="bold")
+            if sign:
+                ax.text((x1 + x2) / 2, (y1 + y2) / 2, sign, fontsize=8.5, color="#2B6CB0", fontweight="bold")
+        if core_drawn:
+            ax.text(0.86, 0.92, "注：+ 促进；± 双向调节", fontsize=8.2, color="#4A5568", ha="right")
+        set_main_title(ax, "fig_2_3", fig23_title, fontsize=12, fontweight="bold")
 
     save_figure(FIG_DIR / "fig_2_3.png", fig)
-    add_fig_meta("fig_2_3", f"图表2-3：{DISEASE_NAME}相关系统关系图（分层布局）", "关系图", "公开资料整理", "系统交互机制", "N/A", "2.2", "关系网络", "数据来源：公开资料整理")
+    fig_2_3_caption = fig23_title
+    add_fig_meta("fig_2_3", fig_2_3_caption, "关系图", "公开资料整理", "系统交互机制", "N/A", "2.2", "关系网络", "数据来源：公开资料整理")
 
     # Chapter 3
     if is_cervical_profile():
@@ -2045,6 +3077,16 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         pie_title = f"{DISEASE_NAME}常用治疗组合偏好"
         pie_labels = ["药物治疗", "物理治疗", "康复训练", "介入治疗", "手术治疗"]
         pie_vals = [32.0, 26.0, 21.0, 9.0, 12.0]
+    elif is_gastritis_profile():
+        diag_flow_title = f"{DISEASE_NAME}临床诊疗流程"
+        diag_flow_nodes = ["症状与红旗征筛查", "Hp检测", "内镜+病理分级", "病因分层", "治疗执行", "复查随访"]
+        schemes = ["抑酸+黏膜保护", "Hp根除方案", "促动力/消化酶", "中西联合方案"]
+        high = [35, 41, 22, 18]
+        mid = [42, 39, 46, 47]
+        low = [23, 20, 32, 35]
+        pie_title = f"{DISEASE_NAME}治疗路径构成"
+        pie_labels = ["抑酸治疗", "黏膜保护", "Hp根除", "促动力/消化酶", "中医协同"]
+        pie_vals = [29.0, 24.0, 22.0, 15.0, 10.0]
     elif is_respiratory_profile():
         diag_flow_title = f"{DISEASE_NAME}临床诊疗流程"
         diag_flow_nodes = ["首诊分诊", "病因评估", "风险分层", "治疗启动", "复评调整", "出院/随访"]
@@ -2066,21 +3108,39 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         pie_labels = ["药物治疗", "非药物干预", "联合方案", "长期管理", "其他支持"]
         pie_vals = [33.0, 21.0, 24.0, 14.0, 8.0]
 
-    draw_simple_flow(FIG_DIR / "fig_3_1.png", diag_flow_title, diag_flow_nodes, direction="lr", color="#276749", figsize=(10.2, 3.2))
-    add_fig_meta("fig_3_1", f"图表3-1：{diag_flow_title}", "流程图", "指南整理", "诊疗路径", "N/A", "3.1", "诊断路径", "数据来源：临床指南与公开资料整理")
+    diag_flow_title = spec_text("fig_3_1", "flow_title", diag_flow_title)
+    diag_flow_nodes = [str(x) for x in spec_list("fig_3_1", "nodes", diag_flow_nodes)]
+    title_3_1 = compose_figure_title("3-1", diag_flow_title)
+    draw_simple_flow(FIG_DIR / "fig_3_1.png", title_3_1, diag_flow_nodes, direction="lr", color="#276749", figsize=(10.2, 3.2))
+    rendered_title_rows.append({"fig_id": "fig_3_1", "rendered_title": normalize_disease_text(title_3_1)})
+    add_fig_meta("fig_3_1", title_3_1, "流程图", "指南整理", "诊疗路径", "N/A", "3.1", "诊断路径", "数据来源：临床指南与公开资料整理")
 
+    schemes = [str(x) for x in spec_list("fig_3_2", "categories", schemes)]
+    high = spec_num_list("fig_3_2", "high", [float(x) for x in high])
+    mid = spec_num_list("fig_3_2", "mid", [float(x) for x in mid])
+    low = spec_num_list("fig_3_2", "low", [float(x) for x in low])
+    n3 = min(len(schemes), len(high), len(mid), len(low))
+    schemes, high, mid, low = schemes[:n3], high[:n3], mid[:n3], low[:n3]
     fig, ax = plt.subplots(figsize=(7.8, 4.6))
     ax.bar(schemes, high, label="高证据", color="#2B6CB0")
     ax.bar(schemes, mid, bottom=high, label="中证据", color="#63B3ED")
     ax.bar(schemes, low, bottom=np.array(high) + np.array(mid), label="低证据", color="#BEE3F8")
     ax.set_ylabel("占比（%）")
-    ax.set_title("主要治疗方案证据等级结构")
-    ax.legend()
+    ax.set_ylim(0, 105)
+    set_main_title(ax, "fig_3_2", "图表3-2：主要治疗方案证据等级结构", pad=10)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 0.995), ncol=3, frameon=False, borderaxespad=0.0)
     save_figure(FIG_DIR / "fig_3_2.png", fig)
     add_fig_meta("fig_3_2", "图表3-2：主要治疗方案证据等级结构", "堆叠柱状图", "公开资料整理", "方案证据分层", "N/A", "3.2", "治疗评估", "数据来源：公开资料整理")
 
-    draw_pie_with_leaders(FIG_DIR / "fig_3_3.png", pie_title, pie_labels, pie_vals, ["#3182CE", "#63B3ED", "#90CDF4", "#A0AEC0", "#2F855A"], figsize=(7.5, 4.4))
-    add_fig_meta("fig_3_3", f"图表3-3：{pie_title}", "饼图", "公开资料整理", "剂型偏好", "N/A", "3.3", "剂型结构", "数据来源：公开资料整理")
+    pie_title = spec_text("fig_3_3", "pie_title", pie_title)
+    pie_labels = [str(x) for x in spec_list("fig_3_3", "labels", pie_labels)]
+    pie_vals = spec_num_list("fig_3_3", "values", [float(x) for x in pie_vals])
+    n33 = min(len(pie_labels), len(pie_vals))
+    pie_labels, pie_vals = pie_labels[:n33], pie_vals[:n33]
+    title_3_3 = compose_figure_title("3-3", pie_title)
+    draw_pie_with_leaders(FIG_DIR / "fig_3_3.png", title_3_3, pie_labels, pie_vals, ["#3182CE", "#63B3ED", "#90CDF4", "#A0AEC0", "#2F855A"], figsize=(7.5, 4.4))
+    rendered_title_rows.append({"fig_id": "fig_3_3", "rendered_title": normalize_disease_text(title_3_3)})
+    add_fig_meta("fig_3_3", title_3_3, "饼图", "公开资料整理", "剂型偏好", "N/A", "3.3", "剂型结构", "数据来源：公开资料整理")
 
     # Chapter 4 (Excel-driven)
     q = ch4.quarterly.copy()
@@ -2093,13 +3153,15 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     ax.set_xticks(range(0, len(q), step))
     ax.set_xticklabels(q["label"].iloc[::step], rotation=35, ha="right")
     ax.set_ylabel("销售额（万元）")
-    ax.set_title(f"三端季度销售额趋势（{q['quarter'].iloc[0]}-{q['quarter'].iloc[-1]}）")
+    set_main_title(ax, "fig_4_1", f"图表4-1：三端季度销售额趋势（{q['quarter'].iloc[0]}-{q['quarter'].iloc[-1]}）")
     ax.legend()
     save_figure(FIG_DIR / "fig_4_1.png", fig)
     add_fig_meta("fig_4_1", f"图表4-1：三端季度销售额趋势（{q['quarter'].iloc[0]}-{q['quarter'].iloc[-1]}）", "折线图", "米内网", "quarterly_channel", "quarterly_channel", "4.1", "第4章数据专线", "数据来源：米内网")
 
     latest = ch4.latest_share
-    draw_pie_with_leaders(FIG_DIR / "fig_4_2.png", f"{ch4.latest_quarter}三端销售结构占比", latest["channel"].tolist(), latest["share_pct"].tolist(), ["#2B6CB0", "#DD6B20", "#2F855A"], figsize=(7.5, 4.4))
+    title_4_2 = spec_text("fig_4_2", "title", f"图表4-2：{ch4.latest_quarter}三端销售结构占比")
+    draw_pie_with_leaders(FIG_DIR / "fig_4_2.png", title_4_2, latest["channel"].tolist(), latest["share_pct"].tolist(), ["#2B6CB0", "#DD6B20", "#2F855A"], figsize=(7.5, 4.4))
+    rendered_title_rows.append({"fig_id": "fig_4_2", "rendered_title": normalize_disease_text(title_4_2)})
     add_fig_meta("fig_4_2", f"图表4-2：{ch4.latest_quarter}三端销售结构占比", "饼图", "米内网", "latest_share", "latest_share", "4.1", "第4章数据专线", "数据来源：米内网")
 
     annual = ch4.annual
@@ -2112,7 +3174,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     ax.set_xticks(x)
     ax.set_xticklabels(annual["year"].astype(int).astype(str))
     ax.set_ylabel("销售额（万元）")
-    ax.set_title("年度三端销售额对比")
+    set_main_title(ax, "fig_4_3", "图表4-3：年度三端销售额对比")
     ax.legend()
     save_figure(FIG_DIR / "fig_4_3.png", fig)
     add_fig_meta("fig_4_3", "图表4-3：年度三端销售额对比", "分组柱状图", "米内网", "annual_channel", "annual_channel", "4.2", "第4章数据专线", "数据来源：米内网")
@@ -2122,37 +3184,48 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     ax.bar(yoy["channel"], yoy["yoy_pct"], color=["#2B6CB0", "#DD6B20", "#2F855A"])
     ax.axhline(0, color="#4A5568", lw=1)
     ax.set_ylabel("同比增速（%）")
-    ax.set_title(f"{ch4.latest_quarter}三端同比增速")
+    set_main_title(ax, "fig_4_4", f"图表4-4：{ch4.latest_quarter}三端同比增速")
     for i, v in enumerate(yoy["yoy_pct"]):
         if pd.notna(v):
             ax.text(i, v + (0.8 if v >= 0 else -1.2), f"{v:.1f}%", ha="center", va="bottom" if v >= 0 else "top", fontsize=9)
     save_figure(FIG_DIR / "fig_4_4.png", fig)
     add_fig_meta("fig_4_4", f"图表4-4：{ch4.latest_quarter}三端同比增速", "柱状图", "米内网", "latest_yoy", "latest_yoy", "4.2", "第4章数据专线", "数据来源：米内网")
 
-    def top10_bar(df: pd.DataFrame, title: str, path: Path):
-        d = df.copy().sort_values("sales", ascending=True)
+    def top10_bar(df: pd.DataFrame, title: str, path: Path, fig_id: str):
         fig, ax = plt.subplots(figsize=(8.2, 4.8))
+        d = df.copy()
+        if d.empty:
+            set_main_title(ax, fig_id, title)
+            ax.axis("off")
+            ax.text(0.5, 0.5, "源表未提供该渠道TOP数据", ha="center", va="center", fontsize=12, color="#4A5568")
+            save_figure(path, fig)
+            return
+        d = d.sort_values("sales", ascending=True)
         ax.barh(d["name"], d["sales"], color="#3182CE")
         ax.set_xlabel("销售额（万元）")
-        ax.set_title(title)
+        set_main_title(ax, fig_id, title)
         save_figure(path, fig)
 
-    top10_bar(ch4.top_hospital, f"医院端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_5.png")
+    top10_bar(ch4.top_hospital, f"图表4-5：医院端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_5.png", "fig_4_5")
     add_fig_meta("fig_4_5", f"图表4-5：医院端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_hospital", "top10_hospital", "4.3", "第4章数据专线", "数据来源：米内网")
-    top10_bar(ch4.top_drugstore, f"药店端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_6.png")
+    top10_bar(ch4.top_drugstore, f"图表4-6：药店端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_6.png", "fig_4_6")
     add_fig_meta("fig_4_6", f"图表4-6：药店端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_drugstore", "top10_drugstore", "4.4", "第4章数据专线", "数据来源：米内网")
-    top10_bar(ch4.top_online, f"线上端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_7.png")
+    top10_bar(ch4.top_online, f"图表4-7：线上端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_7.png", "fig_4_7")
     add_fig_meta("fig_4_7", f"图表4-7：线上端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_online", "top10_online", "4.4", "第4章数据专线", "数据来源：米内网")
 
     fig, ax = plt.subplots(figsize=(8.2, 4.5))
     cr5 = ch4.cr5_latest
     ax.bar(cr5["channel"], cr5["cr5_pct"], color=["#2B6CB0", "#DD6B20", "#2F855A"])
     ax.set_ylabel("CR5（%）")
-    ax.set_ylim(0, max(10, float(cr5["cr5_pct"].max()) * 1.25))
-    ax.set_title(f"{ch4.latest_quarter}三端市场集中度（CR5）")
+    valid_cr5 = cr5["cr5_pct"].dropna()
+    upper = float(valid_cr5.max()) * 1.25 if not valid_cr5.empty else 10.0
+    ax.set_ylim(0, max(10, upper))
+    set_main_title(ax, "fig_4_8", f"图表4-8：{ch4.latest_quarter}三端市场集中度（CR5）")
     for i, v in enumerate(cr5["cr5_pct"]):
         if pd.notna(v):
             ax.text(i, v + 0.8, f"{v:.1f}%", ha="center", fontsize=9)
+        else:
+            ax.text(i, 0.8, "N/A", ha="center", fontsize=9, color="#718096")
     save_figure(FIG_DIR / "fig_4_8.png", fig)
     add_fig_meta("fig_4_8", f"图表4-8：{ch4.latest_quarter}三端市场集中度（CR5）", "柱状图", "米内网", "cr5_latest", "cr5_latest", "4.3", "第4章数据专线", "数据来源：米内网")
 
@@ -2163,17 +3236,27 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         female = [18, 26, 25, 17]
         factors = ["疼痛缓解证据", "神经功能改善", "起效速度", "复发控制", "康复便利性", "支付可及性"]
         vals = [89, 86, 78, 73, 68, 61]
-        journey_title = f"{DISEASE_NAME}全周期管理流程（左→右）"
+        journey_title = f"{DISEASE_NAME}全周期管理流程"
         journey_nodes = ["症状识别", "首诊分层", "保守治疗", "功能康复", "复评决策", "长期管理"]
         labels = ["工作姿势负荷", "居家训练依从", "疼痛波动", "复诊可及性", "康复资源不足", "心理压力"]
         impact = [76, 71, 67, 59, 56, 53]
+    elif is_gastritis_profile():
+        age_groups = ["18-39岁", "40-49岁", "50-59岁", "60岁及以上"]
+        male = [18, 24, 23, 17]
+        female = [16, 22, 24, 20]
+        factors = ["症状控制证据", "Hp根除证据", "病理风险管理", "价格可及性", "复查便利性", "安全性"]
+        vals = [88, 91, 83, 66, 72, 79]
+        journey_title = f"{DISEASE_NAME}长期管理流程"
+        journey_nodes = ["症状出现", "初诊评估", "病因分层", "治疗执行", "复查评估", "长期随访"]
+        labels = ["疗程长度", "复查依从", "不良反应担忧", "信息不一致", "生活方式执行", "复诊可及性"]
+        impact = [71, 69, 58, 56, 61, 54]
     elif is_respiratory_profile():
         age_groups = ["0-2岁", "3-5岁", "6-9岁", "10-14岁"]
         male = [18, 29, 24, 13]
         female = [15, 26, 21, 14]
         factors = ["安全性证据", "起效速度", "口感依从性", "价格可及性", "家长教育支持", "复诊衔接"]
         vals = [91, 84, 78, 66, 62, 58]
-        journey_title = f"{DISEASE_NAME}全周期管理流程（左→右）"
+        journey_title = f"{DISEASE_NAME}全周期管理流程"
         journey_nodes = ["首发症状", "初诊评估", "治疗启动", "功能恢复", "复发预防", "长期随访"]
         labels = ["家长时间投入", "用药频次复杂", "口感接受度", "信息不一致", "疗程提醒不足", "随访中断"]
         impact = [72, 69, 63, 58, 54, 49]
@@ -2183,10 +3266,26 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         female = [19, 25, 24, 18]
         factors = ["安全性证据", "疗效持续性", "起效速度", "支付可及性", "患者教育支持", "复诊衔接"]
         vals = [88, 82, 74, 68, 63, 60]
-        journey_title = f"{DISEASE_NAME}全周期管理流程（左→右）"
+        journey_title = f"{DISEASE_NAME}全周期管理流程"
         journey_nodes = ["症状识别", "初诊评估", "治疗启动", "复评调整", "复发预防", "长期随访"]
         labels = ["治疗复杂度", "执行负担", "信息不一致", "疗程提醒不足", "随访可及性", "生活方式约束"]
         impact = [70, 67, 61, 57, 55, 50]
+
+    age_groups = [str(x) for x in spec_list("fig_5_1", "x_labels", age_groups)]
+    male = spec_num_list("fig_5_1", "male", [float(x) for x in male])
+    female = spec_num_list("fig_5_1", "female", [float(x) for x in female])
+    n51 = min(len(age_groups), len(male), len(female))
+    age_groups, male, female = age_groups[:n51], male[:n51], female[:n51]
+
+    factors = [str(x) for x in spec_list("fig_5_2", "categories", factors)]
+    vals = spec_num_list("fig_5_2", "values", [float(x) for x in vals])
+    n52 = min(len(factors), len(vals))
+    factors, vals = factors[:n52], vals[:n52]
+
+    labels = [str(x) for x in spec_list("fig_5_4", "x_labels", labels)]
+    impact = spec_num_list("fig_5_4", "values", [float(x) for x in impact])
+    n54 = min(len(labels), len(impact))
+    labels, impact = labels[:n54], impact[:n54]
 
     fig, ax = plt.subplots(figsize=(7.8, 4.5))
     x = np.arange(len(age_groups))
@@ -2195,7 +3294,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     ax.set_xticks(x + 0.175)
     ax.set_xticklabels(age_groups)
     ax.set_ylabel("占比（%）")
-    ax.set_title(f"{DISEASE_NAME}就诊人群年龄与性别结构")
+    set_main_title(ax, "fig_5_1", f"图表5-1：{DISEASE_NAME}就诊人群年龄与性别结构")
     ax.legend()
     save_figure(FIG_DIR / "fig_5_1.png", fig)
     add_fig_meta("fig_5_1", f"图表5-1：{DISEASE_NAME}就诊人群年龄与性别结构", "分组柱状图", "公开资料整理", "患者画像", "N/A", "5.1", "患者画像", "数据来源：公开资料整理")
@@ -2204,12 +3303,16 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     ax.barh(factors[::-1], vals[::-1], color="#D69E2E")
     ax.set_xlim(0, 100)
     ax.set_xlabel("影响强度指数")
-    ax.set_title("医生处方偏好与决策要素")
+    set_main_title(ax, "fig_5_2", "图表5-2：医生处方偏好与决策要素")
     save_figure(FIG_DIR / "fig_5_2.png", fig)
     add_fig_meta("fig_5_2", "图表5-2：医生处方偏好与决策要素", "横向柱状图", "公开资料整理", "医生偏好", "N/A", "5.2", "医生偏好", "数据来源：公开资料整理")
 
-    draw_simple_flow(FIG_DIR / "fig_5_3.png", journey_title, journey_nodes, direction="lr", color="#2F855A", figsize=(10.6, 3.1))
-    add_fig_meta("fig_5_3", f"图表5-3：{DISEASE_NAME}全周期管理流程", "流程图", "公开资料整理", "患者旅程", "N/A", "5.3", "全周期管理", "数据来源：公开资料整理")
+    journey_title = spec_text("fig_5_3", "flow_title", journey_title)
+    journey_nodes = [str(x) for x in spec_list("fig_5_3", "nodes", journey_nodes)]
+    title_5_3 = compose_figure_title("5-3", journey_title)
+    draw_simple_flow(FIG_DIR / "fig_5_3.png", title_5_3, journey_nodes, direction="lr", color="#2F855A", figsize=(10.6, 3.1))
+    rendered_title_rows.append({"fig_id": "fig_5_3", "rendered_title": normalize_disease_text(title_5_3)})
+    add_fig_meta("fig_5_3", title_5_3, "流程图", "公开资料整理", "患者旅程", "N/A", "5.3", "全周期管理", "数据来源：公开资料整理")
 
     fig, ax = plt.subplots(figsize=(7.8, 4.5))
     xpos = np.arange(len(labels))
@@ -2217,7 +3320,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     ax.set_ylabel("对依从性的影响（指数）")
     ax.set_xticks(xpos)
     ax.set_xticklabels(labels, rotation=20, ha="right")
-    ax.set_title("依从性影响因素分解")
+    set_main_title(ax, "fig_5_4", "图表5-4：依从性影响因素分解")
     save_figure(FIG_DIR / "fig_5_4.png", fig)
     add_fig_meta("fig_5_4", "图表5-4：依从性影响因素分解", "柱状图", "公开资料整理", "依从性因素", "N/A", "5.2", "依从因素", "数据来源：公开资料整理")
 
@@ -2225,24 +3328,82 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     if is_cervical_profile():
         policy_title = f"{DISEASE_NAME}相关政策时间线"
         policy_events = [("2018", "骨科分级诊疗"), ("2020", "康复服务规范"), ("2022", "集采与支付协同"), ("2024", "慢病管理强化"), ("2025", "互联网复诊规范")]
+    elif is_gastritis_profile():
+        policy_title = f"{DISEASE_NAME}相关政策时间线"
+        policy_events = [("2017", "慢性胃炎共识更新"), ("2020", "消化内镜质量规范"), ("2022", "Hp处理共识更新"), ("2024", "医保目录调整"), ("2025", "互联网复诊规范化")]
     elif is_respiratory_profile():
         policy_title = f"{DISEASE_NAME}相关政策时间线"
         policy_events = [("2019", "儿童用药规范化"), ("2021", "药品审评优化"), ("2023", "质量监管强化"), ("2024", "支付政策调整"), ("2025", "分级诊疗协同")]
     else:
         policy_title = f"{DISEASE_NAME}相关政策时间线"
         policy_events = [("2018", "诊疗规范更新"), ("2020", "支付政策优化"), ("2022", "质量与监管协同"), ("2024", "慢病管理强化"), ("2025", "分级诊疗与数字化协同")]
-    draw_policy_timeline(FIG_DIR / "fig_6_1.png", policy_title, policy_events, figsize=(8.2, 3.0))
-    add_fig_meta("fig_6_1", f"图表6-1：{policy_title}", "时间轴", "政府公开文件", "政策环境", "N/A", "6.1", "政策环境", "数据来源：国家卫健委、国家药监局、国家医保局")
+    policy_title = spec_text("fig_6_1", "timeline_title", policy_title)
+    policy_events_cfg = fig_spec("fig_6_1").get("events")
+    if isinstance(policy_events_cfg, list) and policy_events_cfg:
+        events: List[Tuple[str, str]] = []
+        for it in policy_events_cfg:
+            if isinstance(it, (list, tuple)) and len(it) >= 2:
+                events.append((str(it[0]), render_disease_template(str(it[1]))))
+            elif isinstance(it, dict) and ("year" in it) and ("event" in it):
+                events.append((str(it.get("year", "")), render_disease_template(str(it.get("event", "")))))
+        if events:
+            policy_events = events
+    title_6_1 = compose_figure_title("6-1", policy_title)
+    draw_policy_timeline(FIG_DIR / "fig_6_1.png", title_6_1, policy_events, figsize=(8.2, 3.0))
+    rendered_title_rows.append({"fig_id": "fig_6_1", "rendered_title": normalize_disease_text(title_6_1)})
+    add_fig_meta("fig_6_1", title_6_1, "时间轴", "政府公开文件", "政策环境", "N/A", "6.1", "政策环境", "数据来源：国家卫健委、国家药监局、国家医保局")
 
     fig, ax = plt.subplots(figsize=(8.0, 3.3))
     ax.axis("off")
     boxes = [("审评审批", (0.10, 0.62)), ("质量控制", (0.33, 0.62)), ("医保支付", (0.56, 0.62)), ("终端执行", (0.79, 0.62)), ("用药结构优化", (0.45, 0.28))]
+    boxes_cfg = fig_spec("fig_6_2").get("boxes")
+    if isinstance(boxes_cfg, list) and boxes_cfg:
+        new_boxes: List[Tuple[str, Tuple[float, float]]] = []
+        for b in boxes_cfg:
+            if isinstance(b, (list, tuple)) and len(b) >= 3:
+                try:
+                    new_boxes.append((render_disease_template(str(b[0])), (float(b[1]), float(b[2]))))
+                except Exception:
+                    continue
+            elif isinstance(b, dict):
+                try:
+                    new_boxes.append(
+                        (
+                            render_disease_template(str(b.get("label", ""))),
+                            (float(b.get("x", 0.5)), float(b.get("y", 0.5))),
+                        )
+                    )
+                except Exception:
+                    continue
+        if new_boxes:
+            boxes = new_boxes
     for text, (x, y) in boxes:
         ax.text(x, y, text, ha="center", va="center", fontsize=10, bbox=dict(boxstyle="round,pad=0.35", fc="#F7FAFC", ec="#2D3748"))
     arrows = [((0.16, 0.62), (0.27, 0.62)), ((0.39, 0.62), (0.50, 0.62)), ((0.62, 0.62), (0.73, 0.62)), ((0.56, 0.56), (0.49, 0.35))]
+    arrows_cfg = fig_spec("fig_6_2").get("arrows")
+    if isinstance(arrows_cfg, list) and arrows_cfg:
+        new_arrows: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+        for a in arrows_cfg:
+            if isinstance(a, (list, tuple)) and len(a) >= 4:
+                try:
+                    new_arrows.append(((float(a[0]), float(a[1])), (float(a[2]), float(a[3]))))
+                except Exception:
+                    continue
+            elif isinstance(a, dict):
+                try:
+                    new_arrows.append(
+                        (
+                            (float(a.get("x1", 0.0)), float(a.get("y1", 0.0))),
+                            (float(a.get("x2", 0.0)), float(a.get("y2", 0.0))),
+                        )
+                    )
+                except Exception:
+                    continue
+        if new_arrows:
+            arrows = new_arrows
     for (x1, y1), (x2, y2) in arrows:
         ax.annotate("", xy=(x2, y2), xytext=(x1, y1), arrowprops=dict(arrowstyle="->", lw=1.4, color="#2B6CB0"))
-    ax.set_title("医保支付与监管联动对用药结构的影响路径", fontsize=12, fontweight="bold")
+    set_main_title(ax, "fig_6_2", "图表6-2：医保支付与监管联动对用药结构的影响路径", fontsize=12, fontweight="bold")
     save_figure(FIG_DIR / "fig_6_2.png", fig)
     add_fig_meta("fig_6_2", "图表6-2：医保支付与监管联动对用药结构的影响路径", "路径图", "政策公开文件整理", "监管趋势", "N/A", "6.2", "监管趋势", "数据来源：国家医保局、国家药监局")
 
@@ -2252,11 +3413,20 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     base = np.array([100, 108, 116, 124, 132, 141])
     optimistic = np.array([100, 111, 121, 132, 144, 157])
     conservative = np.array([100, 105, 110, 116, 121, 127])
+    y_cfg = spec_num_list("fig_7_1", "years", years.astype(float).tolist())
+    b_cfg = spec_num_list("fig_7_1", "base", base.astype(float).tolist())
+    o_cfg = spec_num_list("fig_7_1", "optimistic", optimistic.astype(float).tolist())
+    c_cfg = spec_num_list("fig_7_1", "conservative", conservative.astype(float).tolist())
+    n71 = min(len(y_cfg), len(b_cfg), len(o_cfg), len(c_cfg))
+    years = np.array(y_cfg[:n71])
+    base = np.array(b_cfg[:n71])
+    optimistic = np.array(o_cfg[:n71])
+    conservative = np.array(c_cfg[:n71])
     ax.plot(years, base, label="基准情景", color="#2B6CB0", lw=2)
     ax.plot(years, optimistic, label="乐观情景", color="#2F855A", lw=2)
     ax.plot(years, conservative, label="审慎情景", color="#DD6B20", lw=2)
     ax.set_ylabel("市场规模指数（2025=100）")
-    ax.set_title(f"{DISEASE_NAME}市场规模预测（2026-2030）")
+    set_main_title(ax, "fig_7_1", f"图表7-1：{DISEASE_NAME}市场规模预测（2026-2030）")
     ax.legend()
     save_figure(FIG_DIR / "fig_7_1.png", fig)
     add_fig_meta("fig_7_1", f"图表7-1：{DISEASE_NAME}市场规模预测（2026-2030）", "折线图", "米内网+趋势测算", "预测模型", "annual_channel", "7.1", "市场预测", "数据来源：米内网与趋势测算")
@@ -2264,23 +3434,52 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     fig, ax = plt.subplots(figsize=(7.8, 4.5))
     if is_cervical_profile():
         measures = ["证据升级", "康复网络", "数字随访", "依从管理", "术式优化", "准入协同"]
+    elif is_gastritis_profile():
+        measures = ["证据升级", "Hp管理", "病理随访", "准入协同", "渠道组合", "患者教育"]
     elif is_respiratory_profile():
         measures = ["证据升级", "渠道协同", "家长教育", "依从管理", "数字化运营", "准入优化"]
     else:
         measures = ["证据升级", "分层管理", "渠道协同", "依从管理", "数字化随访", "准入优化"]
-    x = [82, 74, 62, 77, 69, 58]
-    y = [86, 79, 72, 75, 84, 65]
-    sizes = [420, 360, 300, 380, 340, 280]
+    measures = [str(x) for x in spec_list("fig_7_2", "labels", measures)]
+    x = spec_num_list("fig_7_2", "x", [82, 74, 62, 77, 69, 58])
+    y = spec_num_list("fig_7_2", "y", [86, 79, 72, 75, 84, 65])
+    sizes = spec_num_list("fig_7_2", "sizes", [420, 360, 300, 380, 340, 280])
+    n72 = min(len(measures), len(x), len(y), len(sizes))
+    measures, x, y, sizes = measures[:n72], x[:n72], y[:n72], sizes[:n72]
     ax.scatter(x, y, s=sizes, c=["#2B6CB0", "#3182CE", "#63B3ED", "#2F855A", "#38A169", "#D69E2E"], alpha=0.75)
     for i, m in enumerate(measures):
         ax.text(x[i] + 0.8, y[i] + 0.6, m, fontsize=8)
     ax.set_xlabel("战略价值")
     ax.set_ylabel("落地可行性")
-    ax.set_title("战略举措优先级矩阵")
-    ax.set_xlim(50, 90)
-    ax.set_ylim(60, 90)
+    set_main_title(ax, "fig_7_2", "图表7-2：战略举措优先级矩阵")
+    xlim_cfg = spec_num_list("fig_7_2", "xlim", [50, 90])
+    ylim_cfg = spec_num_list("fig_7_2", "ylim", [60, 90])
+    if len(xlim_cfg) >= 2:
+        ax.set_xlim(xlim_cfg[0], xlim_cfg[1])
+    else:
+        ax.set_xlim(50, 90)
+    if len(ylim_cfg) >= 2:
+        ax.set_ylim(ylim_cfg[0], ylim_cfg[1])
+    else:
+        ax.set_ylim(60, 90)
     save_figure(FIG_DIR / "fig_7_2.png", fig)
     add_fig_meta("fig_7_2", "图表7-2：战略举措优先级矩阵", "气泡图", "项目分析", "战略举措评分", "N/A", "7.2", "战略建议", "数据来源：项目分析整理")
+
+    title_rows: List[Dict[str, str]] = []
+    for row in rendered_title_rows:
+        title = normalize_disease_text(str(row.get("rendered_title", "")).strip())
+        title_rows.append(
+            {
+                "fig_id": str(row.get("fig_id", "")).strip(),
+                "rendered_title": title,
+                "has_serial_prefix": "1" if FIG_TITLE_SERIAL_RE.match(title) else "0",
+            }
+        )
+    write_csv(
+        OUT_ROOT / "figure_title_registry.csv",
+        title_rows,
+        ["fig_id", "rendered_title", "has_serial_prefix"],
+    )
 
     return fig_rows
 
@@ -2299,6 +3498,13 @@ def set_para_text(paragraph, text: str, bold: bool = False, center: bool = False
     if paragraph.runs:
         for r in paragraph.runs:
             r.bold = bold
+
+
+def apply_reference_paragraph_format(paragraph) -> None:
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    paragraph.paragraph_format.first_line_indent = Inches(0)
+    paragraph.paragraph_format.left_indent = Inches(0)
+    paragraph.paragraph_format.right_indent = Inches(0)
 
 
 def insert_block_with_figures(doc: Document, subtitle: str, content: str, fig_ids: List[str], fig_meta: Dict[str, Dict[str, str]]) -> None:
@@ -2386,7 +3592,8 @@ def assemble_docx(specs: List[BlockSpec], block_text: Dict[str, str], summary: s
     for line in refs_text.splitlines():
         if line.strip():
             p = doc.add_paragraph(style="数据报告正文")
-            set_para_text(p, line.strip())
+            set_para_text(p, normalize_reference_line(line))
+            apply_reference_paragraph_format(p)
 
     for section in doc.sections:
         # Only touch default header to avoid creating extra empty first/even headers.
@@ -2394,8 +3601,10 @@ def assemble_docx(specs: List[BlockSpec], block_text: Dict[str, str], summary: s
         for p in hdr.paragraphs:
             txt = p.text
             txt = txt.replace("XXX", DISEASE_NAME)
+            txt = txt.replace("《XXX疾病市场分析报告》", REPORT_TITLE)
             txt = txt.replace("《XXX市场分析报告》", REPORT_TITLE)
-            txt = txt.replace("XXX市场分析报告", f"{DISEASE_NAME}市场分析报告")
+            txt = txt.replace("XXX疾病市场分析报告", f"{DISEASE_NAME}疾病市场分析报告")
+            txt = txt.replace("XXX市场分析报告", f"{DISEASE_NAME}疾病市场分析报告")
             if txt != p.text:
                 set_para_text(p, txt)
 
@@ -2432,6 +3641,26 @@ def post_process_docx_xml(docx_path: Path) -> None:
         return bool(
             re.search(r'<w:instrText[^>]*>\s*[^<]*\bPAGE\b', footer_xml)
             or re.search(r'<w:fldSimple[^>]*w:instr="[^"]*\bPAGE\b', footer_xml)
+        )
+
+    def build_plain_page_footer_xml() -> str:
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+            "<w:ftr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+            "<w:p>"
+            "<w:pPr><w:jc w:val=\"center\"/></w:pPr>"
+            "<w:r><w:rPr><w:rFonts w:hint=\"default\" w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\" w:cs=\"Times New Roman\"/>"
+            "<w:b/><w:bCs/><w:sz w:val=\"21\"/><w:szCs w:val=\"32\"/></w:rPr><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+            "<w:r><w:rPr><w:rFonts w:hint=\"default\" w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\" w:cs=\"Times New Roman\"/>"
+            "<w:b/><w:bCs/><w:sz w:val=\"21\"/><w:szCs w:val=\"32\"/></w:rPr><w:instrText xml:space=\"preserve\"> PAGE \\* MERGEFORMAT </w:instrText></w:r>"
+            "<w:r><w:rPr><w:rFonts w:hint=\"default\" w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\" w:cs=\"Times New Roman\"/>"
+            "<w:b/><w:bCs/><w:sz w:val=\"21\"/><w:szCs w:val=\"32\"/></w:rPr><w:fldChar w:fldCharType=\"separate\"/></w:r>"
+            "<w:r><w:rPr><w:rFonts w:hint=\"default\" w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\" w:cs=\"Times New Roman\"/>"
+            "<w:b/><w:bCs/><w:sz w:val=\"21\"/><w:szCs w:val=\"32\"/></w:rPr><w:t>1</w:t></w:r>"
+            "<w:r><w:rPr><w:rFonts w:hint=\"default\" w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\" w:cs=\"Times New Roman\"/>"
+            "<w:b/><w:bCs/><w:sz w:val=\"21\"/><w:szCs w:val=\"32\"/></w:rPr><w:fldChar w:fldCharType=\"end\"/></w:r>"
+            "</w:p>"
+            "</w:ftr>"
         )
 
     def pick_main_footer_rid(doc_xml: str, rels_xml: str, xml_parts: Dict[str, str]) -> str | None:
@@ -2480,8 +3709,10 @@ def post_process_docx_xml(docx_path: Path) -> None:
     replacements = {
         "<<<在此填写疾病名>>>": DISEASE_NAME,
         "<<<疾病名>>>": DISEASE_NAME,
+        "《XXX疾病市场分析报告》": REPORT_TITLE,
         "《XXX市场分析报告》": REPORT_TITLE,
-        "XXX市场分析报告": f"{DISEASE_NAME}市场分析报告",
+        "XXX疾病市场分析报告": f"{DISEASE_NAME}疾病市场分析报告",
+        "XXX市场分析报告": f"{DISEASE_NAME}疾病市场分析报告",
         "XXX": DISEASE_NAME,
         "AAA": "",
     }
@@ -2506,24 +3737,23 @@ def post_process_docx_xml(docx_path: Path) -> None:
 
     doc_xml = xml_parts.get("word/document.xml")
     if doc_xml is not None:
-        # Keep page numbering continuous across all sections by removing explicit start resets only in pgNumType.
-        doc_xml = re.sub(
-            r'(<w:pgNumType\b[^>]*?)\s+w:start="[^"]+"([^>]*?/?>)',
-            r"\1\2",
-            doc_xml,
-        )
-        main_footer = pick_main_footer_rid(
-            doc_xml,
-            rels_xml,
-            xml_parts,
-        )
-        if main_footer:
-            # Force all sections to point to one footer that contains PAGE field.
-            doc_xml = re.sub(
-                r'(<w:footerReference[^>]*r:id=")([^"]+)(")',
-                rf"\1{main_footer}\3",
-                doc_xml,
-            )
+        # Normalize section pagination strategy:
+        # - use a single PAGE-capable default footer for all sections;
+        # - clear section-level page-number reset (w:start) to keep continuous numbering.
+        main_footer_rid = pick_main_footer_rid(doc_xml, rels_xml, xml_parts)
+        if main_footer_rid:
+            rel_map = footer_rel_map(rels_xml)
+            main_footer_target = rel_map.get(main_footer_rid, "")
+
+            def normalize_footer_reference(tag: str) -> str:
+                if 'r:id="' in tag:
+                    return re.sub(r'r:id="[^"]+"', f'r:id="{main_footer_rid}"', tag, count=1)
+                return tag.replace("/>", f' r:id="{main_footer_rid}"/>')
+
+            doc_xml = re.sub(r"<w:footerReference[^>]*/>", lambda m: normalize_footer_reference(m.group(0)), doc_xml)
+            if main_footer_target:
+                xml_parts[main_footer_target] = build_plain_page_footer_xml()
+        doc_xml = re.sub(r'(<w:pgNumType\b[^>]*?)\s+w:start="[^"]+"', r"\1", doc_xml)
         xml_parts["word/document.xml"] = doc_xml
 
     settings_xml = xml_parts.get("word/settings.xml")
@@ -2585,19 +3815,19 @@ def paragraph_has_anchor(text: str) -> bool:
     patterns = [
         r"20\d{2}",
         r"\d+(?:\.\d+)?%",
-        r"\d+(?:\.\d+)?(?:万元|万|元|例|岁|天|小时|周|月)",
+        r"\d+(?:\.\d+)?(?:万元|万|元|例|岁|天|小时|周|月|年|季度)",
         r"\[\d+\]",
-        r"(评分|发生率|恢复时间|稳定率|完成率|复评|红旗征|禁忌|适应证|说明书)",
+        r"(评分|发生率|恢复时间|稳定率|完成率|复评|复查|红旗征|禁忌|适应证|说明书|内镜|病理|幽门螺杆菌|CR5|CAGR|YTD)",
     ]
     return any(re.search(p, text) for p in patterns)
 
 
 MEDICAL_PATTERNS = {
-    "red_flag": r"(红旗征|呼吸困难|发绀|低氧|意识改变|脱水)",
-    "contra": r"(年龄限制|禁忌|适应证|说明书)",
-    "review": r"(复评|48小时|72小时|3-5天|1周|随访)",
+    "red_flag": r"(红旗征|警示症状|进行性消瘦|贫血|黑便|呕血|呼吸困难|发绀|低氧|意识改变|脱水)",
+    "contra": r"(年龄限制|禁忌|适应证|说明书|妊娠|肝肾功能)",
+    "review": r"(复评|复查|48小时|72小时|3-5天|1周|3个月|6个月|1年|随访|内镜|病理)",
     "evidence": r"(指南|共识|证据等级|推荐)",
-    "safety": r"(不良反应|安全监测|警示)",
+    "safety": r"(不良反应|安全监测|警示|药物相互作用|风险)",
 }
 
 
@@ -2610,11 +3840,177 @@ STALE_PHRASES = [
     "关键耦合关系在于",
 ]
 
+MANAGEMENT_DRIFT_PHRASES = [
+    "跨部门关键动作拆解为可追踪任务并设置责任人",
+    "谁来做、何时做、如何复盘",
+    "同一话术和同一KPI",
+    "结论-动作-复盘-迭代",
+]
+
+
+def collect_metric_logic_issues(text: str) -> List[str]:
+    issues: List[str] = []
+    if re.search(r"无效换药率[^。；\n]{0,40}(>=|>|不低于|高于)", text):
+        issues.append("无效换药率阈值方向疑似错误")
+    if re.search(r"复购间隔中位数[^。；\n]{0,40}%", text):
+        issues.append("复购间隔中位数与百分比单位冲突")
+    if re.search(r"(中位数)[^。；\n]{0,20}(>=|<=)[^。；\n]{0,10}%", text):
+        issues.append("中位数指标疑似错误使用百分比阈值")
+    return issues
+
+
+def is_nonspecific_reference_url(url: str) -> bool:
+    try:
+        p = urlparse(url.strip())
+    except Exception:
+        return False
+    domain = (p.netloc or "").lower()
+    path = (p.path or "").strip("/")
+    if not domain:
+        return False
+    strict_domains = {"www.who.int", "who.int", "www.nhc.gov.cn", "nhc.gov.cn", "guide.medlive.cn"}
+    return (domain in strict_domains) and (path == "")
+
+
+def parse_evidence_pool(path: Path) -> Tuple[List[Dict[str, object]], List[str]]:
+    """
+    Parse 00_evidence.txt lines:
+      证据ID|标题|机构/作者|年份|要点|可追溯来源
+    """
+    if not path.exists():
+        return [], [f"missing:{path.name}"]
+
+    lines = [x.rstrip("\n") for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    if not lines:
+        return [], [f"empty:{path.name}"]
+
+    rows: List[Dict[str, object]] = []
+    errs: List[str] = []
+    start_idx = 1 if lines[0].startswith("证据ID|") else 0
+
+    for i, line in enumerate(lines[start_idx:], start=start_idx + 1):
+        parts = [p.strip() for p in line.split("|", 5)]
+        if len(parts) < 6:
+            errs.append(f"line{i}:field_count<{6}")
+            continue
+        eid, title, org, year, keypoint, source = parts
+        m = re.match(r"^E(\d{2})$", eid)
+        if not m:
+            errs.append(f"line{i}:bad_evidence_id={eid}")
+            continue
+        num = int(m.group(1))
+        year_ok = bool(re.search(r"(19|20)\d{2}", year))
+        source_ok = ("http" in source) or (EXCEL_PATH.name in source) or (normalize_disease_text(EXCEL_PATH.name) in source)
+        rows.append(
+            {
+                "line": i,
+                "evidence_id": eid,
+                "num": num,
+                "title": title,
+                "org": org,
+                "year": year,
+                "year_ok": year_ok,
+                "keypoint": keypoint,
+                "source": source,
+                "source_ok": source_ok,
+            }
+        )
+    return rows, errs
+
+
+def parse_reference_list(path: Path) -> Tuple[List[Dict[str, object]], List[str]]:
+    """
+    Parse refs.txt lines:
+      [1] 机构. 标题[类型]. 年份. URL/文件
+    """
+    if not path.exists():
+        return [], [f"missing:{path.name}"]
+
+    lines = [x.strip() for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    if not lines:
+        return [], [f"empty:{path.name}"]
+
+    rows: List[Dict[str, object]] = []
+    errs: List[str] = []
+    for i, line in enumerate(lines, start=1):
+        m = re.match(r"^\[(\d+)\]\s+(.+)$", line)
+        if not m:
+            errs.append(f"line{i}:bad_ref_prefix")
+            continue
+        num = int(m.group(1))
+        body = m.group(2).strip()
+        year_ok = bool(re.search(r"(19|20)\d{2}", body))
+        url_m = re.search(r"https?://[^\s]+", body)
+        has_url_or_file = bool(url_m) or (EXCEL_PATH.name in body) or (normalize_disease_text(EXCEL_PATH.name) in body)
+        rows.append(
+            {
+                "line": i,
+                "num": num,
+                "raw": line,
+                "body": body,
+                "year_ok": year_ok,
+                "has_url_or_file": has_url_or_file,
+                "url": url_m.group(0) if url_m else "",
+            }
+        )
+    return rows, errs
+
+
+def collect_reference_chain_metrics(specs: List[BlockSpec], block_text: Dict[str, str], summary_text: str) -> Dict[str, object]:
+    evidence_rows, evidence_parse_errors = parse_evidence_pool(OUT_ROOT / "00_evidence.txt")
+    ref_rows, ref_parse_errors = parse_reference_list(OUT_ROOT / "refs.txt")
+
+    evidence_nums = [int(r["num"]) for r in evidence_rows]
+    ref_nums = [int(r["num"]) for r in ref_rows]
+    evidence_set = set(evidence_nums)
+    ref_set = set(ref_nums)
+
+    evidence_id_dup = sorted([x for x in evidence_set if evidence_nums.count(x) > 1])
+    ref_id_dup = sorted([x for x in ref_set if ref_nums.count(x) > 1])
+
+    evidence_seq_ok = evidence_nums == list(range(1, len(evidence_nums) + 1))
+    ref_seq_ok = ref_nums == list(range(1, len(ref_nums) + 1))
+    evidence_ref_gap = sorted(evidence_set.symmetric_difference(ref_set))
+
+    all_text = "\n".join([block_text[s.block_id] for s in specs]) + "\n" + summary_text
+    cited_nums_all = [int(x) for x in re.findall(r"\[(\d+)\]", all_text)]
+    cited_set = set(cited_nums_all)
+    dangling_cites = sorted([x for x in cited_set if x not in ref_set])
+    uncited_refs = sorted([x for x in ref_set if x not in cited_set])
+    citation_coverage = (len(ref_set - set(uncited_refs)) / len(ref_set)) if ref_set else 0.0
+
+    evidence_bad_year = sorted([int(r["num"]) for r in evidence_rows if not bool(r.get("year_ok"))])
+    evidence_bad_source = sorted([int(r["num"]) for r in evidence_rows if not bool(r.get("source_ok"))])
+    ref_bad_year = sorted([int(r["num"]) for r in ref_rows if not bool(r.get("year_ok"))])
+    ref_bad_source = sorted([int(r["num"]) for r in ref_rows if not bool(r.get("has_url_or_file"))])
+
+    return {
+        "evidence_count": len(evidence_rows),
+        "ref_count": len(ref_rows),
+        "evidence_parse_errors": evidence_parse_errors,
+        "ref_parse_errors": ref_parse_errors,
+        "evidence_id_dup": evidence_id_dup,
+        "ref_id_dup": ref_id_dup,
+        "evidence_seq_ok": evidence_seq_ok,
+        "ref_seq_ok": ref_seq_ok,
+        "evidence_ref_gap": evidence_ref_gap,
+        "cited_count": len(cited_set),
+        "dangling_cites": dangling_cites,
+        "uncited_refs": uncited_refs,
+        "citation_coverage": citation_coverage,
+        "evidence_bad_year": evidence_bad_year,
+        "evidence_bad_source": evidence_bad_source,
+        "ref_bad_year": ref_bad_year,
+        "ref_bad_source": ref_bad_source,
+    }
+
 
 def collect_text_quality_metrics(specs: List[BlockSpec], block_text: Dict[str, str]) -> Dict[str, object]:
     all_text = "\n".join([block_text[s.block_id] for s in specs])
     stale_counts = {ph: all_text.count(ph) for ph in STALE_PHRASES}
+    drift_counts = {ph: all_text.count(ph) for ph in MANAGEMENT_DRIFT_PHRASES}
     max_sentence_dup, top_sentence_dups = sentence_repeat_stats(all_text)
+    metric_logic_issues = collect_metric_logic_issues(all_text)
 
     dup_prefix_hits = 0
     for s in specs:
@@ -2700,8 +4096,10 @@ def collect_text_quality_metrics(specs: List[BlockSpec], block_text: Dict[str, s
     return {
         "all_text": all_text,
         "stale_counts": stale_counts,
+        "drift_counts": drift_counts,
         "max_sentence_dup": max_sentence_dup,
         "top_sentence_dups": top_sentence_dups,
+        "metric_logic_issues": metric_logic_issues,
         "dup_prefix_hits": dup_prefix_hits,
         "chapter_stats": chapter_stats,
         "low_anchor_chapters": low_anchor_chapters,
@@ -2717,11 +4115,198 @@ def collect_text_quality_metrics(specs: List[BlockSpec], block_text: Dict[str, s
     }
 
 
+def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object], summary_text: str) -> str:
+    chapter_chars: Dict[int, int] = metrics["chapter_chars"]  # type: ignore[assignment]
+    chapter_len_fails: List[str] = metrics["chapter_len_fails"]  # type: ignore[assignment]
+    low_anchor_blocks: List[str] = metrics["low_anchor_blocks"]  # type: ignore[assignment]
+    medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
+    total_chars = sum(chapter_chars.values()) + len(re.sub(r"\s+", "", summary_text))
+    total_gap = max(0, 30000 - total_chars)
+
+    chapter_to_specs: Dict[int, List[BlockSpec]] = {}
+    for s in specs:
+        chapter_to_specs.setdefault(s.chapter, []).append(s)
+
+    lines = [
+        "【Codex补写提示词】",
+        f"疾病名：{DISEASE_NAME}",
+        f"当前总字数（章节+总结，去空白）：{total_chars}",
+        "目标总字数：30000-34000",
+        f"当前至少仍需补写：{total_gap}字",
+        "",
+        "请基于现有内容直接扩写/重写 autofile/<疾病名>/ch01.txt ~ ch07.txt 与 summary.txt，并严格满足以下要求：",
+        "1) 每章必须达到脚本最低字数门槛，且全文总字数必须在30000-34000之间。",
+        "2) 每段尽量包含具体医学或市场事实锚点，避免空话、套话、管理咨询黑话。",
+        "3) 引用编号必须保留并尽量分散到各段，不能只在段尾堆砌。",
+        "4) 第1-3章优先补足病因分层、病理机制、诊断路径、治疗证据、风险边界与红旗征。",
+        "5) 第4章只能基于Excel与已生成图表口径写作，不得杜撰额外市场数字。",
+        "6) 第5-7章要补足人群分层、临床路径差异、依从性机制、政策约束、预测假设与战略动作。",
+        "7) 非第4章图表的数据来源描述必须具体，禁止只写“公开资料整理”。",
+        "",
+        "【章节缺口】",
+    ]
+    for chapter in range(1, 8):
+        current_chars = int(chapter_chars.get(chapter, 0))
+        min_chars = int(CHAPTER_MIN_CHARS.get(chapter, 0))
+        gap = max(0, min_chars - current_chars)
+        status = "未达标" if gap > 0 else "已达标"
+        lines.append(f"- 第{chapter}章：当前{current_chars}字，最低{min_chars}字，缺口{gap}字（{status}）")
+        for spec in chapter_to_specs.get(chapter, []):
+            topic_text = "、".join(spec.topics)
+            fig_text = spec.fig_ids if spec.fig_ids else "无"
+            lines.append(
+                f"  - {spec.block_id} {spec.subtitle} | 目标{spec.target_chars}字 | 重点主题：{topic_text} | 证据：{spec.evidence_ids} | 图表：{fig_text}"
+            )
+    lines.extend(
+        [
+            "",
+            "【当前薄弱点】",
+            "- 分章字数未达标：" + (", ".join(chapter_len_fails) if chapter_len_fails else "无"),
+            "- 事实锚点不足block：" + (", ".join(low_anchor_blocks) if low_anchor_blocks else "无"),
+            "- 第1-3章医学密度不足block：" + (", ".join(medical_density_failed) if medical_density_failed else "无"),
+            "",
+            "【建议执行方式】",
+            f"- 直接覆写：{OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
+            f"- 同步补足：{OUT_ROOT / 'summary.txt'}",
+            f"- 完成后重跑：python scripts/run_pipeline.py --disease \"{DISEASE_NAME}\"",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
+    chapter_to_specs: Dict[int, List[BlockSpec]] = {}
+    for spec in specs:
+        chapter_to_specs.setdefault(spec.chapter, []).append(spec)
+
+    chapter_target_map: Dict[int, int] = {chapter: sum(item.target_chars for item in items) for chapter, items in chapter_to_specs.items()}
+    total_target = sum(chapter_target_map.values())
+    summary_target_floor = 1200
+    draft_floor = max(31200, total_target + summary_target_floor)
+    draft_ceiling = 33000
+
+    lines = [
+        "【Codex写作前置蓝图】",
+        f"疾病名：{DISEASE_NAME}",
+        f"建议初稿总字数：{draft_floor}-{draft_ceiling}",
+        "目标原则：初稿直接达标，避免先欠字数、后补字数。",
+        "执行原则：每章至少高于硬门槛150-300字；总结建议1200-1500字。",
+        "",
+        "【章节目标】",
+    ]
+    for chapter in range(1, 8):
+        floor = int(CHAPTER_MIN_CHARS.get(chapter, 0))
+        target = int(max(chapter_target_map.get(chapter, floor), floor + 200))
+        lines.append(f"- 第{chapter}章：硬门槛{floor}字；建议初稿目标{target}-{target + 200}字")
+        for spec in chapter_to_specs.get(chapter, []):
+            topic_text = "、".join(spec.topics)
+            fig_text = spec.fig_ids if spec.fig_ids else "无"
+            lines.append(
+                f"  - {spec.block_id} {spec.subtitle} | block目标{spec.target_chars}字 | 重点主题：{topic_text} | 证据：{spec.evidence_ids} | 图表：{fig_text}"
+            )
+    lines.extend(
+        [
+            "",
+            "【写作顺序建议】",
+            f"1) 先按 {OUT_ROOT / '00_evidence.txt'} 与 {OUT_ROOT / 'manifest_text.csv'} 完成正文",
+            f"2) 再单独写 {OUT_ROOT / 'summary.txt'}，避免总结挤占正文篇幅",
+            f"3) 图表2-3 先由当前 Codex 会话写入 {OUT_ROOT / FIG23_CODEX_SPEC_NAME}，再运行 stage3-stage5",
+            "4) 非第4章图表的数据来源行必须具体到指南/综述/机构，不得只写“公开资料整理”",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def build_fig23_codex_spec_template() -> Dict[str, object]:
+    return {
+        "schema_version": "fig23_codex_v1",
+        "disease": DISEASE_NAME,
+        "authored_by": "codex",
+        "layout_mode": "dual_panel",
+        "title": compose_figure_title("2-3", f"{DISEASE_NAME}上游决定因素与下游后果关系图"),
+        "caption": compose_figure_title("2-3", f"{DISEASE_NAME}上游决定因素与下游后果关系图"),
+        "source_line": "数据来源：请由当前 Codex 会话根据正文与证据池填写为具体来源行",
+        "dual_panel": {
+            "left": {
+                "title": "上游驱动与核心病理",
+                "nodes": [
+                    {"id": "driver_a", "label": "待由Codex替换", "x": 0.18, "y": 0.80, "width": 0.26},
+                    {"id": "driver_b", "label": "待由Codex替换", "x": 0.50, "y": 0.80, "width": 0.26},
+                    {"id": "driver_c", "label": "待由Codex替换", "x": 0.82, "y": 0.80, "width": 0.26},
+                    {"id": "core", "label": "待由Codex替换", "x": 0.50, "y": 0.30, "width": 0.34, "fc": "#FEEBC8", "ec": "#C05621"}
+                ],
+                "edges": []
+            },
+            "right": {
+                "title": "临床后果与管理反馈",
+                "nodes": [
+                    {"id": "core", "label": "待由Codex替换", "x": 0.50, "y": 0.80, "width": 0.34, "fc": "#FEEBC8", "ec": "#C05621"},
+                    {"id": "outcome_a", "label": "待由Codex替换", "x": 0.18, "y": 0.32, "width": 0.30},
+                    {"id": "outcome_b", "label": "待由Codex替换", "x": 0.50, "y": 0.32, "width": 0.30},
+                    {"id": "outcome_c", "label": "待由Codex替换", "x": 0.82, "y": 0.32, "width": 0.30}
+                ],
+                "edges": []
+            }
+        }
+    }
+
+
+def build_fig23_codex_prompt() -> str:
+    return "\n".join(
+        [
+            "【Codex关系图前置任务】",
+            f"请先阅读：{OUT_ROOT / 'ch02.txt'}、{OUT_ROOT / '00_evidence.txt'}、{OUT_ROOT / 'figure_specs.json'}",
+            f"然后由当前 Codex 会话写入：{OUT_ROOT / FIG23_CODEX_SPEC_NAME}",
+            f"模板参考：{OUT_ROOT / FIG23_CODEX_SPEC_TEMPLATE_NAME}",
+            "",
+            "强制要求：",
+            "1) authored_by 必须为 codex；layout_mode 必须为 dual_panel。",
+            "2) 左面板画“上游决定因素→核心病理/修复过程”，右面板画“修复不足→临床后果/反馈”。",
+            "3) 每个面板优先控制在 3-4 个节点；优先减少节点数量，不要用 generic systems_map 塞满节点。",
+            "4) 所有箭头需要通过 via / sign_xy 做几何避让，避免同轨重叠与箭头贴边。",
+            "5) title / caption 可写完整图题，也可只写题干；脚本会自动去重图表序号。",
+            "6) source_line 必须写成具体来源行，不得只写“公开资料整理”。",
+        ]
+    )
+
+
+def write_codex_preflight_assets() -> None:
+    specs = build_block_specs()
+    write_text(OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME, build_codex_content_blueprint(specs) + "\n")
+    write_json(OUT_ROOT / FIG23_CODEX_SPEC_TEMPLATE_NAME, build_fig23_codex_spec_template())
+    write_text(OUT_ROOT / FIG23_CODEX_PROMPT_NAME, build_fig23_codex_prompt() + "\n")
+
+
+def build_fig23_review_prompt() -> str:
+    return "\n".join(
+        [
+            "请读取并审核以下图与配置：",
+            f"1) {FIG_DIR / 'fig_2_3.png'}",
+            f"2) {OUT_ROOT / FIG23_CODEX_SPEC_NAME}",
+            "",
+            "请按以下清单逐项判定“通过/不通过”，并给出可直接落地的配置修订建议：",
+            "- 因果方向是否合理",
+            "- 是否存在同轨重叠或箭头贴边",
+            "- 节点之间是否留有足够空白（尤其是同层节点不能互相挤压）",
+            "- 双向/虚线关系是否可读（是否做了几何避让）",
+            "- 层级语义是否一致（同层节点是否混合系统与非系统语义）",
+            "- 图题与图意是否一致",
+            "",
+            "若不通过，请优先回写以下配置字段后重跑：",
+            f"- {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 dual_panel.left/right.nodes",
+            f"- {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 dual_panel.left/right.edges.via",
+            f"- {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 dual_panel.left/right.edges.sign_xy",
+        ]
+    )
+
+
 def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], summary_text: str) -> Tuple[str, bool]:
     metrics = collect_text_quality_metrics(specs, block_text)
     stale_counts: Dict[str, int] = metrics["stale_counts"]  # type: ignore[assignment]
+    drift_counts: Dict[str, int] = metrics["drift_counts"]  # type: ignore[assignment]
     max_sentence_dup: int = metrics["max_sentence_dup"]  # type: ignore[assignment]
     top_sentence_dups: List[Tuple[str, int]] = metrics["top_sentence_dups"]  # type: ignore[assignment]
+    metric_logic_issues: List[str] = metrics["metric_logic_issues"]  # type: ignore[assignment]
     dup_prefix_hits: int = metrics["dup_prefix_hits"]  # type: ignore[assignment]
     chapter_stats: List[Tuple[int, int, int, float, int, int]] = metrics["chapter_stats"]  # type: ignore[assignment]
     low_anchor_chapters: List[int] = metrics["low_anchor_chapters"]  # type: ignore[assignment]
@@ -2731,12 +4316,17 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
     medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
     cagr_logic_ok: bool = metrics["cagr_logic_ok"]  # type: ignore[assignment]
     cr5_logic_ok: bool = metrics["cr5_logic_ok"]  # type: ignore[assignment]
+    total_chars = sum(len(re.sub(r"\s+", "", block_text[s.block_id])) for s in specs) + len(re.sub(r"\s+", "", summary_text))
 
     fail_reasons: List[str] = []
     if max(stale_counts.values()) > 8:
         fail_reasons.append("高频套话超阈值")
+    if max(drift_counts.values()) > 0:
+        fail_reasons.append("报告定位跑偏（管理话术残留）")
     if max_sentence_dup >= 4:
         fail_reasons.append("全书句级重复超阈值")
+    if metric_logic_issues:
+        fail_reasons.append("指标逻辑或单位冲突")
     if dup_prefix_hits > 0:
         fail_reasons.append("标题重复前缀残留")
     if low_anchor_chapters:
@@ -2745,8 +4335,10 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
         fail_reasons.append("章节内句级重复超阈值")
     if chapter_no_cites:
         fail_reasons.append("章节引用缺失")
+    if not (30000 <= total_chars <= 34000):
+        fail_reasons.append("总字数未达到30000-34000")
     if chapter_len_fails:
-        fail_reasons.append("分章字数未达下限")
+        fail_reasons.append("分章最低字数未达标")
     if medical_density_failed:
         fail_reasons.append("第1-3章医学要素不足")
     if not cagr_logic_ok:
@@ -2758,11 +4350,14 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
 
     lines = [
         "【TXT阶段质量检查】",
-        f"总字数（章节+总结，去空白）：{sum(len(re.sub(r'\s+', '', block_text[s.block_id])) for s in specs) + len(re.sub(r'\s+', '', summary_text))}",
+        f"流程模式：{WORKFLOW_MODE}",
+        f"总字数（章节+总结，去空白）：{total_chars}",
         f"标题重复前缀命中数：{dup_prefix_hits}",
         "高频套话统计：" + ", ".join([f"{k}={v}" for k, v in stale_counts.items()]),
+        "管理话术命中：" + ", ".join([f"{k}={v}" for k, v in drift_counts.items()]),
         f"句级最大重复次数：{max_sentence_dup}",
         "句级重复TOP5：" + ("; ".join([f"{c}x:{s[:36]}..." for s, c in top_sentence_dups]) if top_sentence_dups else "无"),
+        "指标逻辑冲突：" + ("；".join(metric_logic_issues) if metric_logic_issues else "无"),
         "第四章逻辑一致性：" + ("通过" if cagr_logic_ok else "不通过"),
         "第四章CR5叙述一致性：" + ("通过" if cr5_logic_ok else "不通过"),
         "第1-3章医学密度不足block：" + (", ".join(medical_density_failed) if medical_density_failed else "无"),
@@ -2781,6 +4376,7 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
             "锚点覆盖不足章节：" + (", ".join([str(x) for x in low_anchor_chapters]) if low_anchor_chapters else "无"),
             "章节内句级重复超阈值章节：" + (", ".join([str(x) for x in chapter_dup_fails]) if chapter_dup_fails else "无"),
             "引用缺失章节：" + (", ".join([str(x) for x in chapter_no_cites]) if chapter_no_cites else "无"),
+            f"总字数30000-34000：{'通过' if (30000 <= total_chars <= 34000) else '不通过'}",
             "分章字数下限未达标：" + (", ".join(chapter_len_fails) if chapter_len_fails else "无"),
             "",
             "【TXT闸门判定】",
@@ -2790,7 +4386,10 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
     )
     report = "\n".join(lines)
     write_text(OUT_ROOT / "txt_stage_qa.txt", report + "\n")
+    write_text(OUT_ROOT / "codex_rewrite_prompt.txt", build_codex_rewrite_prompt(specs, metrics, summary_text) + "\n")
+    write_text(OUT_ROOT / "fig23_review_prompt.txt", build_fig23_review_prompt() + "\n")
     return report, passed
+
 
 
 def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: List[Dict[str, str]], summary_text: str) -> Tuple[str, bool]:
@@ -2815,7 +4414,7 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
             else ""
         )
 
-        pgnum_reset_ok = not bool(re.search(r"<w:pgNumType[^>]*\bw:start=\"[^\"]+\"", document_xml))
+        pgnum_start_present = bool(re.search(r"<w:pgNumType[^>]*\bw:start=\"[^\"]+\"", document_xml))
         footer_ids = re.findall(r"<w:footerReference[^>]*r:id=\"([^\"]+)\"", document_xml)
         unique_footer_ids = sorted(set(footer_ids))
         footer_uniform_ok = len(unique_footer_ids) == 1
@@ -2835,15 +4434,25 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
             rel_map[rid] = p
 
         footer_has_page = False
-        footer_target = ""
-        if footer_uniform_ok and unique_footer_ids:
-            footer_target = rel_map.get(unique_footer_ids[0], "")
-            if footer_target and footer_target in names:
-                footer_xml = zf.read(footer_target).decode("utf-8", errors="ignore")
-                footer_has_page = bool(
-                    re.search(r'<w:instrText[^>]*>\s*[^<]*\bPAGE\b', footer_xml)
-                    or re.search(r'<w:fldSimple[^>]*w:instr="[^"]*\bPAGE\b', footer_xml)
-                )
+        footer_targets_with_page: List[str] = []
+        footer_textbox_targets: List[str] = []
+        for rid in unique_footer_ids:
+            footer_target = rel_map.get(rid, "")
+            if not footer_target or footer_target not in names:
+                continue
+            footer_xml = zf.read(footer_target).decode("utf-8", errors="ignore")
+            has_page = bool(
+                re.search(r'<w:instrText[^>]*>\s*[^<]*\bPAGE\b', footer_xml)
+                or re.search(r'<w:fldSimple[^>]*w:instr="[^"]*\bPAGE\b', footer_xml)
+            )
+            if has_page:
+                footer_targets_with_page.append(footer_target)
+                if ("<w:txbxContent" in footer_xml) or ('txBox="1"' in footer_xml):
+                    footer_textbox_targets.append(footer_target)
+        footer_has_page = len(footer_targets_with_page) > 0
+        footer_target = ",".join(sorted(set(footer_targets_with_page)))
+        footer_page_in_textbox = len(footer_textbox_targets) > 0
+        footer_textbox_target = ",".join(sorted(set(footer_textbox_targets)))
 
         update_fields_ok = bool(re.search(r'<w:updateFields[^>]*w:val="true"', settings_xml))
 
@@ -2852,10 +4461,75 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     src_count = sum(1 for p in doc.paragraphs if p.text.strip().startswith("数据来源："))
     src_ch4_count = sum(1 for p in doc.paragraphs if p.text.strip() == "数据来源：米内网")
 
+    title_registry_error = ""
+    title_registry: Dict[str, str] = {}
+    title_missing: List[str] = []
+    title_no_serial: List[str] = []
+    title_caption_mismatch: List[str] = []
+    try:
+        title_registry = load_figure_title_registry()
+    except Exception as e:
+        title_registry_error = str(e)
+    if not title_registry_error:
+        for row in fig_rows:
+            fid = str(row.get("fig_id", "")).strip()
+            expected_caption = normalize_disease_text(str(row.get("caption", "")).strip())
+            rendered_title = title_registry.get(fid, "")
+            if not rendered_title:
+                title_missing.append(fid)
+                continue
+            if not FIG_TITLE_SERIAL_RE.match(rendered_title):
+                title_no_serial.append(fid)
+            if rendered_title != expected_caption:
+                title_caption_mismatch.append(fid)
+
+    fig23_expected = fig23_expected_caption()
+    fig23_forbidden = fig23_forbidden_captions()
+    disallow_terms = fig23_disallow_nodes()
+    disallow_term_hits: List[str] = []
+    fig23_manifest_caption = ""
+    fig23_registry_caption = ""
+    fig23_manifest_ok = True
+    fig23_registry_ok = True
+    fig23_forbidden_hits: List[str] = []
+
+    fig23_manifest_row = next((r for r in fig_rows if str(r.get("fig_id", "")).strip() == "fig_2_3"), None)
+    if fig23_manifest_row:
+        fig23_manifest_caption = normalize_disease_text(str(fig23_manifest_row.get("caption", "")).strip())
+        fig23_manifest_ok = fig23_manifest_caption == fig23_expected
+    else:
+        fig23_manifest_ok = False
+
+    fig23_registry_caption = normalize_disease_text(title_registry.get("fig_2_3", "").strip())
+    fig23_registry_ok = fig23_registry_caption == fig23_expected
+    for term in disallow_terms:
+        if not term:
+            continue
+        if ((term in fig23_expected) or (term in fig23_manifest_caption) or (term in fig23_registry_caption)) and term not in disallow_term_hits:
+            disallow_term_hits.append(term)
+
+    for p in doc.paragraphs:
+        ptxt = normalize_disease_text(p.text.strip())
+        if ptxt and ptxt in fig23_forbidden and ptxt not in fig23_forbidden_hits:
+            fig23_forbidden_hits.append(ptxt)
+
+    fig23_struct = validate_fig23_structural_rules()
+    fig23_spec_source = fig23_spec_origin()
+    fig23_codex_ok = fig23_codex_authored_ok()
+    fig23_layout_mode_active = str(fig23_struct.get("layout_mode", ""))
+    fig23_layout_required_ok = fig23_layout_mode_active == "dual_panel"
+    fig23_causal_issues: List[str] = list(fig23_struct.get("causal_direction_issues", []) or [])
+    fig23_overlap_issues: List[str] = list(fig23_struct.get("same_track_overlap_issues", []) or [])
+    fig23_bidir_issues: List[str] = list(fig23_struct.get("bidirectional_readability_issues", []) or [])
+    fig23_layer_issues: List[str] = list(fig23_struct.get("layer_consistency_issues", []) or [])
+    fig23_node_spacing_issues: List[str] = list(fig23_struct.get("node_spacing_issues", []) or [])
+
     metrics = collect_text_quality_metrics(specs, block_text)
     stale_counts: Dict[str, int] = metrics["stale_counts"]  # type: ignore[assignment]
+    drift_counts: Dict[str, int] = metrics["drift_counts"]  # type: ignore[assignment]
     max_sentence_dup: int = metrics["max_sentence_dup"]  # type: ignore[assignment]
     top_sentence_dups: List[Tuple[str, int]] = metrics["top_sentence_dups"]  # type: ignore[assignment]
+    metric_logic_issues: List[str] = metrics["metric_logic_issues"]  # type: ignore[assignment]
     dup_prefix_hits: int = metrics["dup_prefix_hits"]  # type: ignore[assignment]
     low_anchor_blocks: List[str] = metrics["low_anchor_blocks"]  # type: ignore[assignment]
     chapter_chars: Dict[int, int] = metrics["chapter_chars"]  # type: ignore[assignment]
@@ -2865,21 +4539,38 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
 
     # Reference traceability checks.
-    refs_lines = [x.strip() for x in (OUT_ROOT / "refs.txt").read_text(encoding="utf-8").splitlines() if x.strip()]
+    refs_lines = [normalize_reference_line(x) for x in (OUT_ROOT / "refs.txt").read_text(encoding="utf-8").splitlines() if x.strip()]
     normalized_excel_name = normalize_disease_text(EXCEL_PATH.name)
     bad_ref_rows: List[str] = []
     for idx, line in enumerate(refs_lines, start=1):
         has_year = bool(re.search(r"(19|20)\d{2}", line))
         has_url_or_file = ("http" in line) or (EXCEL_PATH.name in line) or (normalized_excel_name in line)
         has_org_and_title = line.startswith("[") and len(line.split(". ")) >= 2
-        if not (has_year and has_url_or_file and has_org_and_title):
+        url_m = re.search(r"https?://[^\s]+", line)
+        nonspecific = is_nonspecific_reference_url(url_m.group(0)) if url_m else False
+        if (not (has_year and has_url_or_file and has_org_and_title)) or nonspecific:
             bad_ref_rows.append(str(idx))
 
+    ref_chain = collect_reference_chain_metrics(specs, block_text, summary_text)
+    evidence_count: int = int(ref_chain["evidence_count"])  # type: ignore[assignment]
+    ref_count: int = int(ref_chain["ref_count"])  # type: ignore[assignment]
+    evidence_parse_errors: List[str] = ref_chain["evidence_parse_errors"]  # type: ignore[assignment]
+    ref_parse_errors: List[str] = ref_chain["ref_parse_errors"]  # type: ignore[assignment]
+    evidence_id_dup: List[int] = ref_chain["evidence_id_dup"]  # type: ignore[assignment]
+    ref_id_dup: List[int] = ref_chain["ref_id_dup"]  # type: ignore[assignment]
+    evidence_seq_ok: bool = bool(ref_chain["evidence_seq_ok"])
+    ref_seq_ok: bool = bool(ref_chain["ref_seq_ok"])
+    evidence_ref_gap: List[int] = ref_chain["evidence_ref_gap"]  # type: ignore[assignment]
+    cited_count: int = int(ref_chain["cited_count"])  # type: ignore[assignment]
+    dangling_cites: List[int] = ref_chain["dangling_cites"]  # type: ignore[assignment]
+    uncited_refs: List[int] = ref_chain["uncited_refs"]  # type: ignore[assignment]
+    citation_coverage: float = float(ref_chain["citation_coverage"])  # type: ignore[assignment]
+    evidence_bad_year: List[int] = ref_chain["evidence_bad_year"]  # type: ignore[assignment]
+    evidence_bad_source: List[int] = ref_chain["evidence_bad_source"]  # type: ignore[assignment]
+    ref_bad_year: List[int] = ref_chain["ref_bad_year"]  # type: ignore[assignment]
+    ref_bad_source: List[int] = ref_chain["ref_bad_source"]  # type: ignore[assignment]
+
     qa_fail_reasons: List[str] = []
-    if not (30000 <= total_chars <= 34000):
-        qa_fail_reasons.append("总字数不在30000-34000")
-    if chapter_len_fails:
-        qa_fail_reasons.append("分章字数未达下限")
     if not (20 <= fig_count <= 30):
         qa_fail_reasons.append("图表总量不在20-30")
     if not (6 <= ch4_fig_count <= 8):
@@ -2890,20 +4581,30 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         qa_fail_reasons.append("第四章数据来源“米内网”行数不一致")
     if not all(v == 0 for v in placeholder_hits.values()):
         qa_fail_reasons.append("存在占位符残留")
-    if not pgnum_reset_ok:
-        qa_fail_reasons.append("页码重置未清理")
-    if not footer_uniform_ok:
-        qa_fail_reasons.append("节页脚未统一")
     if not footer_has_page:
         qa_fail_reasons.append("页脚PAGE域缺失")
+    if footer_page_in_textbox:
+        qa_fail_reasons.append("页脚PAGE域仍位于文本框中")
+    if pgnum_start_present:
+        qa_fail_reasons.append("检测到页码重置配置(w:start)")
+    if not footer_uniform_ok:
+        qa_fail_reasons.append("页脚引用不一致（多节footerReference）")
     if not update_fields_ok:
         qa_fail_reasons.append("settings.updateFields未启用")
     if dup_prefix_hits != 0:
         qa_fail_reasons.append("标题重复前缀残留")
     if max(stale_counts.values()) > 8:
         qa_fail_reasons.append("高频套话超阈值")
+    if max(drift_counts.values()) > 0:
+        qa_fail_reasons.append("报告定位跑偏（管理话术残留）")
     if max_sentence_dup >= 4:
         qa_fail_reasons.append("句级重复超阈值")
+    if metric_logic_issues:
+        qa_fail_reasons.append("指标逻辑或单位冲突")
+    if not (30000 <= total_chars <= 34000):
+        qa_fail_reasons.append("总字数未达到30000-34000")
+    if chapter_len_fails:
+        qa_fail_reasons.append("分章最低字数未达标")
     if low_anchor_blocks:
         qa_fail_reasons.append("事实锚点覆盖率不足")
     if not cagr_logic_ok:
@@ -2914,10 +4615,61 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         qa_fail_reasons.append("第1-3章医学密度不足")
     if bad_ref_rows:
         qa_fail_reasons.append("参考文献可核验性不足")
+    if evidence_parse_errors or ref_parse_errors:
+        qa_fail_reasons.append("证据池或参考文献解析失败")
+    if evidence_count == 0 or ref_count == 0:
+        qa_fail_reasons.append("证据池或参考文献为空")
+    if evidence_count != ref_count:
+        qa_fail_reasons.append("证据池条数与参考文献条数不一致")
+    if evidence_id_dup or ref_id_dup:
+        qa_fail_reasons.append("证据ID或参考编号重复")
+    if (not evidence_seq_ok) or (not ref_seq_ok):
+        qa_fail_reasons.append("证据ID或参考编号未按连续序号编排")
+    if evidence_ref_gap:
+        qa_fail_reasons.append("证据ID与参考编号集合不一致")
+    if dangling_cites:
+        qa_fail_reasons.append("正文存在悬空引用编号")
+    if evidence_bad_year or evidence_bad_source or ref_bad_year or ref_bad_source:
+        qa_fail_reasons.append("证据或参考存在年份/来源缺失")
+    if ref_count > 0 and citation_coverage < 0.60:
+        qa_fail_reasons.append("正文引用覆盖率不足（<60%）")
+    if title_registry_error:
+        qa_fail_reasons.append("缺少图题注册表")
+    if title_missing:
+        qa_fail_reasons.append("图题注册缺失")
+    if title_no_serial:
+        qa_fail_reasons.append("图片本体图题缺少图表序号")
+    if title_caption_mismatch:
+        qa_fail_reasons.append("图片本体图题与manifest图注不一致")
+    if fig23_spec_source != "codex_spec":
+        qa_fail_reasons.append("图表2-3未使用Codex专用配置文件")
+    if not fig23_codex_ok:
+        qa_fail_reasons.append("图表2-3配置未标记为Codex authored")
+    if not fig23_layout_required_ok:
+        qa_fail_reasons.append("图表2-3未使用dual_panel分层布局")
+    if not fig23_manifest_ok:
+        qa_fail_reasons.append("图表2-3 manifest图注未匹配当前疾病画像语义口径")
+    if not fig23_registry_ok:
+        qa_fail_reasons.append("图表2-3图片主标题未匹配当前疾病画像语义口径")
+    if fig23_forbidden_hits:
+        qa_fail_reasons.append("图表2-3命中禁用旧标题")
+    if disallow_term_hits:
+        qa_fail_reasons.append("文档出现关系图禁用节点术语")
+    if fig23_causal_issues:
+        qa_fail_reasons.append("图表2-3因果方向检查不通过")
+    if fig23_overlap_issues:
+        qa_fail_reasons.append("图表2-3存在同轨重叠线")
+    if fig23_bidir_issues:
+        qa_fail_reasons.append("图表2-3双向关系可读性不足")
+    if fig23_layer_issues:
+        qa_fail_reasons.append("图表2-3层级一致性检查不通过")
+    if fig23_node_spacing_issues:
+        qa_fail_reasons.append("图表2-3节点间距或留白不足")
     qa_passed = len(qa_fail_reasons) == 0
 
     lines = [
         "【QA检查结果】",
+        f"流程模式：{WORKFLOW_MODE}",
         f"总字数（章节+总结，去空白）：{total_chars}",
         f"图表总数：{fig_count}",
         f"第四章图表数：{ch4_fig_count}",
@@ -2927,23 +4679,63 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         f"第四章“数据来源：米内网”行数：{src_ch4_count}",
         f"标题重复前缀命中数：{dup_prefix_hits}",
         "占位符残留统计：" + ", ".join([f"{k}={v}" for k, v in placeholder_hits.items()]),
-        f"页码重置清理(pgNumType.w:start)：{'通过' if pgnum_reset_ok else '不通过'}",
-        f"footerReference统一ID：{'通过' if footer_uniform_ok else '不通过'}（IDs={','.join(unique_footer_ids) if unique_footer_ids else '无'}）",
-        f"统一页脚含PAGE域：{'通过' if footer_has_page else '不通过'}（{footer_target if footer_target else '未解析'}）",
+        f"页码重置配置(w:start)：{'检测到（存在重置风险）' if pgnum_start_present else '未检测到'}",
+        f"footerReference统一ID（信息项）：{'是' if footer_uniform_ok else '否'}（IDs={','.join(unique_footer_ids) if unique_footer_ids else '无'}）",
+        f"引用页脚含PAGE域：{'通过' if footer_has_page else '不通过'}（{footer_target if footer_target else '未解析'}）",
+        f"页脚PAGE域位于文本框：{'是' if footer_page_in_textbox else '否'}（{footer_textbox_target if footer_textbox_target else '无'}）",
         f"settings.updateFields=true：{'通过' if update_fields_ok else '不通过'}",
         "高频套话统计：" + ", ".join([f"{k}={v}" for k, v in stale_counts.items()]),
+        "管理话术命中：" + ", ".join([f"{k}={v}" for k, v in drift_counts.items()]),
         f"句级最大重复次数：{max_sentence_dup}",
         "句级重复TOP5：" + ("; ".join([f"{c}x:{s[:36]}..." for s, c in top_sentence_dups]) if top_sentence_dups else "无"),
+        "指标逻辑冲突：" + ("；".join(metric_logic_issues) if metric_logic_issues else "无"),
         "事实锚点覆盖不足block：" + (", ".join(low_anchor_blocks) if low_anchor_blocks else "无"),
         "分章字数下限未达标：" + (", ".join(chapter_len_fails) if chapter_len_fails else "无"),
         "第四章逻辑一致性：" + ("通过" if cagr_logic_ok else "不通过"),
         "第四章CR5叙述一致性：" + ("通过" if cr5_logic_ok else "不通过"),
         "第1-3章医学密度不足block：" + (", ".join(medical_density_failed) if medical_density_failed else "无"),
         "参考文献可核验异常行：" + (", ".join(bad_ref_rows) if bad_ref_rows else "无"),
+        "证据池条数：" + str(evidence_count),
+        "参考文献条数：" + str(ref_count),
+        "正文引用编号数（去重）：" + str(cited_count),
+        "引用覆盖率（正文命中参考）：" + f"{citation_coverage*100:.1f}%",
+        "证据池解析异常：" + (", ".join(evidence_parse_errors) if evidence_parse_errors else "无"),
+        "参考文献解析异常：" + (", ".join(ref_parse_errors) if ref_parse_errors else "无"),
+        "证据ID重复：" + (", ".join([str(x) for x in evidence_id_dup]) if evidence_id_dup else "无"),
+        "参考编号重复：" + (", ".join([str(x) for x in ref_id_dup]) if ref_id_dup else "无"),
+        "证据ID连续性：" + ("通过" if evidence_seq_ok else "不通过"),
+        "参考编号连续性：" + ("通过" if ref_seq_ok else "不通过"),
+        "证据ID与参考编号差异：" + (", ".join([str(x) for x in evidence_ref_gap]) if evidence_ref_gap else "无"),
+        "正文悬空引用编号：" + (", ".join([str(x) for x in dangling_cites]) if dangling_cites else "无"),
+        "未被正文使用的参考编号：" + (", ".join([str(x) for x in uncited_refs]) if uncited_refs else "无"),
+        "证据池年份异常编号：" + (", ".join([str(x) for x in evidence_bad_year]) if evidence_bad_year else "无"),
+        "证据池来源异常编号：" + (", ".join([str(x) for x in evidence_bad_source]) if evidence_bad_source else "无"),
+        "参考年份异常编号：" + (", ".join([str(x) for x in ref_bad_year]) if ref_bad_year else "无"),
+        "参考来源异常编号：" + (", ".join([str(x) for x in ref_bad_source]) if ref_bad_source else "无"),
+        "图题注册表：" + (title_registry_error if title_registry_error else "已加载"),
+        "图题注册缺失fig_id：" + (", ".join(title_missing) if title_missing else "无"),
+        "图片本体图题缺少序号fig_id：" + (", ".join(title_no_serial) if title_no_serial else "无"),
+        "图题与manifest图注不一致fig_id：" + (", ".join(title_caption_mismatch) if title_caption_mismatch else "无"),
+        "当前疾病画像：" + active_profile_id(),
+        "图表2-3来源配置：" + fig23_spec_source,
+        "图表2-3 authored_by=codex：" + ("通过" if fig23_codex_ok else "不通过"),
+        "图表2-3预期图注：" + fig23_expected,
+        "图表2-3 manifest图注：" + (fig23_manifest_caption if fig23_manifest_caption else "缺失"),
+        "图表2-3 图片主标题：" + (fig23_registry_caption if fig23_registry_caption else "缺失"),
+        "图表2-3 图注口径：" + ("通过" if fig23_manifest_ok else "不通过"),
+        "图表2-3 主标题口径：" + ("通过" if fig23_registry_ok else "不通过"),
+        "图表2-3 禁用标题命中：" + (", ".join(fig23_forbidden_hits) if fig23_forbidden_hits else "无"),
+        "图表关系图禁用节点命中：" + (", ".join(disallow_term_hits) if disallow_term_hits else "无"),
+        "图表2-3结构检查布局模式：" + (fig23_layout_mode_active if fig23_layout_mode_active else "N/A"),
+        "图表2-3因果方向问题：" + ("；".join(fig23_causal_issues) if fig23_causal_issues else "无"),
+        "图表2-3同轨重叠问题：" + ("；".join(fig23_overlap_issues) if fig23_overlap_issues else "无"),
+        "图表2-3双向可读性问题：" + ("；".join(fig23_bidir_issues) if fig23_bidir_issues else "无"),
+        "图表2-3层级一致性问题：" + ("；".join(fig23_layer_issues) if fig23_layer_issues else "无"),
+        "图表2-3节点间距问题：" + ("；".join(fig23_node_spacing_issues) if fig23_node_spacing_issues else "无"),
         "",
         "【约束判定】",
-        f"字数是否在30000-34000：{'通过' if 30000 <= total_chars <= 34000 else '不通过'}",
-        f"分章最低字数：{'通过' if not chapter_len_fails else '不通过'}",
+        f"字数是否在30000-34000：{'通过' if (30000 <= total_chars <= 34000) else '不通过'}",
+        f"分章最低字数：{'通过' if (not chapter_len_fails) else '不通过'}",
         f"第1章>=3000：{'通过' if chapter_chars[1] >= CHAPTER_MIN_CHARS[1] else '不通过'}",
         f"第2章>=3500：{'通过' if chapter_chars[2] >= CHAPTER_MIN_CHARS[2] else '不通过'}",
         f"第3章>=4800：{'通过' if chapter_chars[3] >= CHAPTER_MIN_CHARS[3] else '不通过'}",
@@ -2956,18 +4748,45 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         f"标题行与来源行一致：{'通过' if cap_count == src_count == fig_count else '不通过'}",
         f"第四章来源行固定米内网：{'通过' if src_ch4_count == ch4_fig_count else '不通过'}",
         f"占位符清洗：{'通过' if all(v == 0 for v in placeholder_hits.values()) else '不通过'}",
-        f"页码连续性(w:start清理)：{'通过' if pgnum_reset_ok else '不通过'}",
-        f"节页脚统一性：{'通过' if footer_uniform_ok else '不通过'}",
+        f"页码连续性（无w:start重置）：{'通过' if not pgnum_start_present else '不通过'}",
+        f"节页脚统一引用：{'通过' if footer_uniform_ok else '不通过'}",
         f"页脚PAGE域存在：{'通过' if footer_has_page else '不通过'}",
+        f"页脚PAGE域不在文本框：{'通过' if not footer_page_in_textbox else '不通过'}",
         f"updateFields=true：{'通过' if update_fields_ok else '不通过'}",
         f"重复前缀清洗：{'通过' if dup_prefix_hits == 0 else '不通过'}",
         f"高频套话压缩：{'通过' if max(stale_counts.values()) <= 8 else '不通过'}",
+        f"管理话术清洗：{'通过' if max(drift_counts.values()) == 0 else '不通过'}",
         f"句级重复阈值(<4)：{'通过' if max_sentence_dup < 4 else '不通过'}",
+        f"指标逻辑一致性：{'通过' if not metric_logic_issues else '不通过'}",
         f"事实锚点覆盖率阈值(>=70%)：{'通过' if not low_anchor_blocks else '不通过'}",
         f"第四章逻辑一致性：{'通过' if cagr_logic_ok else '不通过'}",
         f"第四章CR5叙述一致性：{'通过' if cr5_logic_ok else '不通过'}",
         f"第1-3章医学密度校验：{'通过' if not medical_density_failed else '不通过'}",
         f"引用可核验性：{'通过' if not bad_ref_rows else '不通过'}",
+        f"证据池/参考解析：{'通过' if not (evidence_parse_errors or ref_parse_errors) else '不通过'}",
+        f"证据池与参考条数一致：{'通过' if evidence_count == ref_count and evidence_count > 0 else '不通过'}",
+        f"证据与参考编号连续：{'通过' if (evidence_seq_ok and ref_seq_ok) else '不通过'}",
+        f"证据与参考编号集合一致：{'通过' if not evidence_ref_gap else '不通过'}",
+        f"正文悬空引用清洗：{'通过' if not dangling_cites else '不通过'}",
+        f"引用覆盖率>=60%：{'通过' if (ref_count > 0 and citation_coverage >= 0.60) else '不通过'}",
+        f"证据年份/来源完整：{'通过' if not (evidence_bad_year or evidence_bad_source) else '不通过'}",
+        f"参考年份/来源完整：{'通过' if not (ref_bad_year or ref_bad_source) else '不通过'}",
+        f"图题注册表可用：{'通过' if not title_registry_error else '不通过'}",
+        f"图题注册完整性：{'通过' if not title_missing else '不通过'}",
+        f"图片本体图题序号：{'通过' if not title_no_serial else '不通过'}",
+        f"图题与manifest一致性：{'通过' if not title_caption_mismatch else '不通过'}",
+        f"图表2-3图注语义口径：{'通过' if fig23_manifest_ok else '不通过'}",
+        f"图表2-3主标题语义口径：{'通过' if fig23_registry_ok else '不通过'}",
+        f"图表2-3使用Codex专用配置：{'通过' if fig23_spec_source == 'codex_spec' else '不通过'}",
+        f"图表2-3配置标记为Codex authored：{'通过' if fig23_codex_ok else '不通过'}",
+        f"图表2-3 dual_panel分层布局：{'通过' if fig23_layout_required_ok else '不通过'}",
+        f"图表2-3禁用标题清洗：{'通过' if not fig23_forbidden_hits else '不通过'}",
+        f"图表关系图禁用节点清洗：{'通过' if not disallow_term_hits else '不通过'}",
+        f"图表2-3因果方向合理性：{'通过' if not fig23_causal_issues else '不通过'}",
+        f"图表2-3同轨重叠检查：{'通过' if not fig23_overlap_issues else '不通过'}",
+        f"图表2-3双向关系可读性：{'通过' if not fig23_bidir_issues else '不通过'}",
+        f"图表2-3层级一致性：{'通过' if not fig23_layer_issues else '不通过'}",
+        f"图表2-3节点间距/留白：{'通过' if not fig23_node_spacing_issues else '不通过'}",
         "",
         "【最终判定】",
         f"结果：{'通过' if qa_passed else '不通过'}",
@@ -2976,6 +4795,7 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         "备注：目录与页码字段已设置updateFields=true，打开Word后全选F9可刷新显示。",
     ]
     report = "\n".join(lines)
+    write_text(OUT_ROOT / "fig23_review_prompt.txt", build_fig23_review_prompt() + "\n")
     write_text(OUT_ROOT / "qa_check.txt", report + "\n")
     return report, qa_passed
 
@@ -2985,16 +4805,6 @@ def ensure_inputs(require_excel: bool = False, require_template: bool = False) -
         raise FileNotFoundError(f"Missing input Excel: {EXCEL_PATH}")
     if require_template and not TEMPLATE_PATH.exists():
         raise FileNotFoundError(f"Missing template docx: {TEMPLATE_PATH}")
-
-
-def generate_and_validate_text(ch4: Ch4Data) -> Tuple[List[BlockSpec], Dict[str, str], str]:
-    specs = build_block_specs()
-    block_text, summary_text = build_text_outputs(ch4)
-    txt_report, txt_passed = run_txt_stage_checks(specs, block_text, summary_text)
-    print(txt_report)
-    if not txt_passed:
-        raise RuntimeError("TXT阶段质量闸门未通过，已停止后续阶段。请先修复ch01~ch07文本。")
-    return specs, block_text, summary_text
 
 
 def load_block_text_from_files(specs: List[BlockSpec]) -> Dict[str, str]:
@@ -3042,6 +4852,20 @@ def load_manifest_fig_rows() -> List[Dict[str, str]]:
     return rows
 
 
+def load_figure_title_registry() -> Dict[str, str]:
+    path = OUT_ROOT / "figure_title_registry.csv"
+    if not path.exists():
+        raise FileNotFoundError(f"Missing figure title registry: {path}")
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+    required = ["fig_id", "rendered_title", "has_serial_prefix"]
+    for c in required:
+        if c not in (reader.fieldnames or []):
+            raise ValueError(f"Invalid figure title registry, missing column: {c}")
+    return {str(r.get("fig_id", "")).strip(): normalize_disease_text(str(r.get("rendered_title", "")).strip()) for r in rows if str(r.get("fig_id", "")).strip()}
+
+
 def ensure_figure_files(fig_rows: List[Dict[str, str]]) -> None:
     missing: List[str] = []
     for row in fig_rows:
@@ -3056,48 +4880,59 @@ def ensure_figure_files(fig_rows: List[Dict[str, str]]) -> None:
         raise FileNotFoundError("Missing figure files for stage4/stage5: " + ", ".join(missing))
 
 
+def cleanup_intermediate_outputs() -> None:
+    keep_files = {FINAL_DOCX.name, "qa_check.txt", "role_run.log"}
+    for p in OUT_ROOT.iterdir():
+        if p.is_file():
+            if p.name in keep_files:
+                continue
+            try:
+                p.unlink()
+            except Exception:
+                pass
+            continue
+        if p.is_dir():
+            try:
+                shutil.rmtree(p)
+            except Exception:
+                pass
+
+
 def run_stage1_evidence() -> None:
     ensure_runtime_dirs()
     write_evidence_and_refs()
+    write_codex_preflight_assets()
     print(f"阶段1完成：{OUT_ROOT / '00_evidence.txt'}")
 
 
-def run_stage2_text() -> None:
-    ensure_runtime_dirs()
-    ensure_inputs(require_excel=True)
-    ch4 = build_ch4_data(EXCEL_PATH)
-    generate_and_validate_text(ch4)
-    print(f"阶段2完成：{OUT_ROOT}")
-
-
-def run_stage3_ch4_and_figures(reuse_text: bool = True) -> None:
+def run_stage3_ch4_and_figures() -> None:
     ensure_runtime_dirs()
     ensure_inputs(require_excel=True)
     ch4 = build_ch4_data(EXCEL_PATH)
     write_ch4_profile_files(ch4)
+    write_codex_preflight_assets()
     specs = build_block_specs()
-    used_reuse = False
-    if reuse_text:
-        try:
-            block_text = load_block_text_from_files(specs)
-            summary_path = OUT_ROOT / "summary.txt"
-            if not summary_path.exists():
-                raise FileNotFoundError(f"Missing summary file: {summary_path}")
-            summary_text = summary_path.read_text(encoding="utf-8").strip()
-            txt_report, txt_passed = run_txt_stage_checks(specs, block_text, summary_text)
-            print(txt_report)
-            if not txt_passed:
-                raise RuntimeError("复用文本未通过TXT阶段质量闸门，请先修复ch01~ch07文本。")
-            used_reuse = True
-            print("阶段3：复用既有章节文本与summary。")
-        except (FileNotFoundError, ValueError):
-            used_reuse = False
-    if not used_reuse:
-        specs, _, _ = generate_and_validate_text(ch4)
+    try:
+        block_text = load_block_text_from_files(specs)
+        summary_path = OUT_ROOT / "summary.txt"
+        if not summary_path.exists():
+            raise FileNotFoundError(f"Missing summary file: {summary_path}")
+        summary_text = summary_path.read_text(encoding="utf-8").strip()
+        txt_report, txt_passed = run_txt_stage_checks(specs, block_text, summary_text)
+        print(txt_report)
+        if not txt_passed:
+            raise RuntimeError("TXT闸门未通过，流程已中断。请先按txt_stage_qa.txt与codex_rewrite_prompt.txt补齐总字数与分章字数，再重新执行。")
+        print("阶段3：复用既有章节文本与summary。")
+    except (FileNotFoundError, ValueError) as exc:
+        raise RuntimeError(
+            "未检测到可复用文本。"
+            f"请先参考 {OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME} 由当前 Codex 会话写入 ch01~ch07.txt/summary.txt/refs.txt，"
+            f"并先完成 {OUT_ROOT / FIG23_CODEX_SPEC_NAME}，"
+            "再执行 python scripts/run_pipeline.py。"
+        ) from exc
     fig_rows = generate_figures(ch4)
     make_manifest_files(specs, fig_rows)
-    mode = "复用文本" if used_reuse else "重生成文本"
-    print(f"阶段3完成（{mode}）：{OUT_ROOT / 'ch04_agg_tables.xlsx'}，图表数={len(fig_rows)}")
+    print(f"阶段3完成（复用文本）：{OUT_ROOT / 'ch04_agg_tables.xlsx'}，图表数={len(fig_rows)}")
 
 
 def run_stage4_assemble_docx() -> None:
@@ -3125,197 +4960,104 @@ def run_stage5_qa() -> None:
     qa, qa_passed = run_checks(specs, block_text, fig_rows, summary_text)
     print(qa)
     if not qa_passed:
-        raise RuntimeError("最终QA未通过，请查看qa_check.txt并修复后重试。")
+        raise RuntimeError("QA未通过硬门槛，流程已中断。请先按qa_check.txt修订后重新执行。")
+    if LITE_OUTPUT:
+        cleanup_intermediate_outputs()
+        print("已启用轻量输出：中间产物已清理，仅保留final docx与qa结果。")
     print(f"\n阶段5完成：{OUT_ROOT / 'qa_check.txt'}")
 
 
-@dataclass(frozen=True)
-class RoleSpec:
-    role_id: str
-    role_name: str
-    description: str
-    stage_hint: str
-    runner: Callable[[], None]
+def ensure_prewritten_text_ready() -> None:
+    specs = build_block_specs()
+    _ = load_block_text_from_files(specs)
+    summary_path = OUT_ROOT / "summary.txt"
+    if not summary_path.exists():
+        raise FileNotFoundError(f"Missing summary file: {summary_path}")
 
 
-ROLE_SEQUENCE = ["evidence", "content", "docx", "qa"]
-
-
-def build_role_specs(reuse_text: bool = True) -> Dict[str, RoleSpec]:
-    return {
-        "evidence": RoleSpec(
-            role_id="evidence",
-            role_name="Evidence Agent",
-            description="构建证据池与参考文献基础文件",
-            stage_hint="stage1",
-            runner=run_stage1_evidence,
-        ),
-        "content": RoleSpec(
-            role_id="content",
-            role_name="Content Agent",
-            description="执行正文+第四章数据专线+图表与清单",
-            stage_hint="stage2+stage3",
-            runner=lambda reuse_text=reuse_text: run_stage3_ch4_and_figures(reuse_text=reuse_text),
-        ),
-        "docx": RoleSpec(
-            role_id="docx",
-            role_name="Docx Agent",
-            description="装配并后处理最终Word文档",
-            stage_hint="stage4",
-            runner=run_stage4_assemble_docx,
-        ),
-        "qa": RoleSpec(
-            role_id="qa",
-            role_name="QA Agent",
-            description="执行最终质量检查并输出qa_check",
-            stage_hint="stage5",
-            runner=run_stage5_qa,
-        ),
-    }
-
-
-def normalize_role(role: str) -> str:
-    s = role.strip().lower()
-    alias = {
-        "all": "all",
-        "full": "all",
-        "0": "all",
-        "1": "evidence",
-        "role1": "evidence",
-        "evidence": "evidence",
-        "stage1": "evidence",
-        "2": "content",
-        "role2": "content",
-        "content": "content",
-        "text": "content",
-        "ch4": "content",
-        "stage2": "content",
-        "stage3": "content",
-        "3": "docx",
-        "role3": "docx",
-        "docx": "docx",
-        "stage4": "docx",
-        "4": "qa",
-        "role4": "qa",
-        "qa": "qa",
-        "stage5": "qa",
-    }
-    if s not in alias:
-        raise ValueError("Unsupported role: {}. Use all/evidence/content/docx/qa.".format(role))
-    return alias[s]
-
-
-def run_role_pipeline(role: str = "all", reuse_text: bool = True) -> None:
+def run_assist_pipeline() -> None:
     ensure_runtime_dirs()
-    role_key = normalize_role(role)
-    specs = build_role_specs(reuse_text=reuse_text)
-    if role_key == "all":
-        plan = [specs[rid] for rid in ROLE_SEQUENCE]
-    else:
-        plan = [specs[role_key]]
+    try:
+        ensure_prewritten_text_ready()
+    except Exception as exc:
+        raise RuntimeError(
+            "assist链路需要先准备好 AI 写作文本（ch01~ch07.txt、summary.txt）。"
+            "请先由AI写入后再执行脚本。"
+        ) from exc
+
+    plan = [
+        {
+            "role_id": "content",
+            "role_name": "Content Agent",
+            "description": "复用会话正文，执行第四章数据专线+图表与清单",
+            "stage_hint": "stage3(reuse-only)",
+            "runner": run_stage3_ch4_and_figures,
+        },
+        {
+            "role_id": "docx",
+            "role_name": "Docx Agent",
+            "description": "装配并后处理最终Word文档",
+            "stage_hint": "stage4",
+            "runner": run_stage4_assemble_docx,
+        },
+        {
+            "role_id": "qa",
+            "role_name": "QA Agent",
+            "description": "执行最终质量检查并输出qa_check",
+            "stage_hint": "stage5",
+            "runner": run_stage5_qa,
+        },
+    ]
 
     log_lines = [
         "【Role执行日志】",
         f"开始时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"执行模式：{role_key}",
-        f"计划角色：{', '.join([f'{x.role_id}({x.stage_hint})' for x in plan])}",
+        "执行模式：assist",
+        f"流程模式：{WORKFLOW_MODE}",
+        "计划角色：" + ", ".join([f"{x['role_id']}({x['stage_hint']})" for x in plan]),
         "",
     ]
 
     total = len(plan)
     for idx, spec in enumerate(plan, start=1):
         started = datetime.now()
-        print(f"[角色 {idx}/{total}] {spec.role_name} ({spec.role_id}) 开始：{spec.description}")
+        print(f"[角色 {idx}/{total}] {spec['role_name']} ({spec['role_id']}) 开始：{spec['description']}")
         try:
-            spec.runner()
+            spec["runner"]()
         except Exception as exc:
             elapsed = (datetime.now() - started).total_seconds()
             log_lines.append(
-                f"[FAIL] {spec.role_id} | stage={spec.stage_hint} | duration={elapsed:.1f}s | error={type(exc).__name__}: {exc}"
+                f"[FAIL] {spec['role_id']} | stage={spec['stage_hint']} | duration={elapsed:.1f}s | error={type(exc).__name__}: {exc}"
             )
             write_text(OUT_ROOT / "role_run.log", "\n".join(log_lines) + "\n")
             raise
         elapsed = (datetime.now() - started).total_seconds()
-        log_lines.append(f"[PASS] {spec.role_id} | stage={spec.stage_hint} | duration={elapsed:.1f}s")
-        print(f"[角色 {idx}/{total}] {spec.role_name} ({spec.role_id}) 完成，用时{elapsed:.1f}s")
+        log_lines.append(f"[PASS] {spec['role_id']} | stage={spec['stage_hint']} | duration={elapsed:.1f}s")
+        print(f"[角色 {idx}/{total}] {spec['role_name']} ({spec['role_id']}) 完成，用时{elapsed:.1f}s")
 
     log_lines.append("")
     log_lines.append(f"结束时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     write_text(OUT_ROOT / "role_run.log", "\n".join(log_lines) + "\n")
 
 
-def run_all_pipeline(reuse_text: bool = True) -> None:
-    run_role_pipeline("all", reuse_text=reuse_text)
-    print(f"\n完成：{FINAL_DOCX}")
-
-
-def normalize_stage(stage: str) -> str:
-    s = stage.strip().lower()
-    alias = {
-        "all": "all",
-        "full": "all",
-        "0": "all",
-        "1": "1",
-        "stage1": "1",
-        "evidence": "1",
-        "2": "2",
-        "stage2": "2",
-        "text": "2",
-        "3": "3",
-        "stage3": "3",
-        "ch4": "3",
-        "4": "4",
-        "stage4": "4",
-        "docx": "4",
-        "5": "5",
-        "stage5": "5",
-        "qa": "5",
-    }
-    if s not in alias:
-        raise ValueError(f"Unsupported stage: {stage}. Use all/1/2/3/4/5.")
-    return alias[s]
-
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Disease report pipeline runner")
+    parser = argparse.ArgumentParser(description="Disease report pipeline runner (assist-only)")
     parser.add_argument("--disease", default=None, help="疾病名，例如：糖尿病")
     parser.add_argument("--from-readme", action="store_true", help="从README读取“疾病名：”配置（未传--disease时生效）")
     parser.add_argument("--readme", default="README.md", help="README文件路径（默认README.md）")
     parser.add_argument("--xlsx", default=None, help="第四章Excel路径，默认：<疾病名>第四章数据.xlsx")
     parser.add_argument("--template", default="template.docx", help="Word模板路径")
     parser.add_argument("--out-base", default="autofile", help="输出根目录（默认autofile）")
-    parser.add_argument("--reuse-text", dest="reuse_text", action="store_true", default=True, help="阶段3优先复用已有ch01~ch07与summary（默认开启）")
-    parser.add_argument("--no-reuse-text", dest="reuse_text", action="store_false", help="阶段3忽略已有文本并重新生成")
-    parser.add_argument("--stage", default="all", help="执行阶段：all/1/2/3/4/5")
-    parser.add_argument("--role", default=None, help="执行角色：all/evidence/content/docx/qa（设置后优先于--stage）")
+    parser.add_argument("--lite-output", action="store_true", help="轻量输出：流程结束后清理中间产物，仅保留final docx与qa结果")
     return parser.parse_args()
-
-
-def dispatch_stage(stage: str, reuse_text: bool = True) -> None:
-    if stage == "all":
-        run_all_pipeline(reuse_text=reuse_text)
-    elif stage == "1":
-        run_stage1_evidence()
-    elif stage == "2":
-        run_stage2_text()
-    elif stage == "3":
-        run_stage3_ch4_and_figures(reuse_text=reuse_text)
-    elif stage == "4":
-        run_stage4_assemble_docx()
-    elif stage == "5":
-        run_stage5_qa()
-    else:
-        raise ValueError(f"Unsupported stage: {stage}")
 
 
 def run(
     disease: str,
-    stage: str = "all",
     xlsx: str | None = None,
     template: str | None = "template.docx",
     out_base: str | None = "autofile",
-    role: str | None = None,
-    reuse_text: bool = True,
+    lite_output: bool = False,
 ) -> None:
     configure_runtime(
         disease_name=disease,
@@ -3323,31 +5065,30 @@ def run(
         template_path=Path(template) if template else None,
         out_base=Path(out_base) if out_base else None,
     )
-    if role is not None and role.strip():
-        run_role_pipeline(role, reuse_text=reuse_text)
-    else:
-        dispatch_stage(normalize_stage(stage), reuse_text=reuse_text)
+    configure_output_mode(lite_output)
+    print(f"流程模式：{WORKFLOW_MODE}（固定）")
+    print("提示：脚本默认不做正文写作；请优先复用当前会话AI已写入的ch01~ch07/summary文本。")
+    print("QA闸门：严格（固定，失败即中断）")
+    run_stage1_evidence()
+    run_assist_pipeline()
 
 
 def run_stage1(disease: str, out_base: str | None = "autofile") -> None:
-    run(disease=disease, stage="1", out_base=out_base)
-
-
-def run_stage2(
-    disease: str,
-    xlsx: str | None = None,
-    out_base: str | None = "autofile",
-) -> None:
-    run(disease=disease, stage="2", xlsx=xlsx, out_base=out_base)
+    configure_runtime(disease_name=disease, out_base=Path(out_base) if out_base else None)
+    run_stage1_evidence()
 
 
 def run_stage3(
     disease: str,
     xlsx: str | None = None,
     out_base: str | None = "autofile",
-    reuse_text: bool = True,
 ) -> None:
-    run(disease=disease, stage="3", xlsx=xlsx, out_base=out_base, reuse_text=reuse_text)
+    configure_runtime(
+        disease_name=disease,
+        excel_path=Path(xlsx) if xlsx else None,
+        out_base=Path(out_base) if out_base else None,
+    )
+    run_stage3_ch4_and_figures()
 
 
 def run_stage4(
@@ -3355,11 +5096,17 @@ def run_stage4(
     template: str | None = "template.docx",
     out_base: str | None = "autofile",
 ) -> None:
-    run(disease=disease, stage="4", template=template, out_base=out_base)
+    configure_runtime(
+        disease_name=disease,
+        template_path=Path(template) if template else None,
+        out_base=Path(out_base) if out_base else None,
+    )
+    run_stage4_assemble_docx()
 
 
 def run_stage5(disease: str, out_base: str | None = "autofile") -> None:
-    run(disease=disease, stage="5", out_base=out_base)
+    configure_runtime(disease_name=disease, out_base=Path(out_base) if out_base else None)
+    run_stage5_qa()
 
 
 def main() -> None:
@@ -3371,12 +5118,10 @@ def main() -> None:
     )
     run(
         disease=disease_name,
-        stage=args.stage,
         xlsx=args.xlsx,
         template=args.template,
         out_base=args.out_base,
-        role=args.role,
-        reuse_text=args.reuse_text,
+        lite_output=args.lite_output,
     )
 
 
