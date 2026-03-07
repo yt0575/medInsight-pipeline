@@ -1,0 +1,836 @@
+{
+  "default_profile": "generic",
+  "profiles": [
+    {
+      "id": "cervical",
+      "priority": 100,
+      "keywords": [
+        "颈椎病",
+        "颈椎",
+        "神经根型颈椎病",
+        "脊髓型颈椎病",
+        "椎动脉型颈椎病",
+        "腰椎",
+        "脊柱",
+        "椎间盘"
+      ],
+      "query_aliases": {
+        "颈椎病": "cervical spondylosis"
+      },
+      "fig23_layout_mode": "dual_panel",
+      "fig23_require_core_node": true,
+      "fig23_core_label_template": "{disease}\\n核心病理负担",
+      "fig23_disallow_nodes": [
+        "代谢系统",
+        "营养状态"
+      ],
+      "fig23_top_to_core": [
+        "神经系统",
+        "肌肉骨骼系统",
+        "血管系统"
+      ],
+      "fig23_core_to_bottom": [
+        "睡眠系统",
+        "心理行为",
+        "内分泌代谢"
+      ],
+      "fig23_dual_panel": {
+        "left": {
+          "title": "结构-供血-受压链路",
+          "nodes": [
+            {
+              "id": "neuro",
+              "label": "神经系统",
+              "x": 0.24,
+              "y": 0.78,
+              "width": 0.3
+            },
+            {
+              "id": "musculo",
+              "label": "肌肉骨骼系统",
+              "x": 0.76,
+              "y": 0.78,
+              "width": 0.34
+            },
+            {
+              "id": "vascular",
+              "label": "血管系统",
+              "x": 0.24,
+              "y": 0.3,
+              "width": 0.3
+            },
+            {
+              "id": "endocrine",
+              "label": "内分泌代谢系统",
+              "x": 0.76,
+              "y": 0.3,
+              "width": 0.3
+            }
+          ],
+          "edges": [
+            {
+              "from": "vascular",
+              "to": "neuro",
+              "from_anchor": "north",
+              "to_anchor": "south"
+            },
+            {
+              "from": "endocrine",
+              "to": "musculo",
+              "from_anchor": "north",
+              "to_anchor": "south"
+            },
+            {
+              "from": "neuro",
+              "to": "musculo",
+              "from_anchor": "east",
+              "to_anchor": "north",
+              "via": [
+                [
+                  0.5,
+                  0.9
+                ],
+                [
+                  0.76,
+                  0.9
+                ]
+              ]
+            },
+            {
+              "from": "vascular",
+              "to": "musculo",
+              "from_anchor": "east",
+              "to_anchor": "west",
+              "via": [
+                [
+                  0.48,
+                  0.3
+                ],
+                [
+                  0.48,
+                  0.56
+                ],
+                [
+                  0.59,
+                  0.56
+                ]
+              ]
+            }
+          ]
+        },
+        "right": {
+          "title": "症状-睡眠-心理反馈环",
+          "nodes": [
+            {
+              "id": "neuro",
+              "label": "神经系统",
+              "x": 0.5,
+              "y": 0.78,
+              "width": 0.3
+            },
+            {
+              "id": "sleep",
+              "label": "睡眠系统",
+              "x": 0.22,
+              "y": 0.3,
+              "width": 0.3
+            },
+            {
+              "id": "psycho",
+              "label": "心理行为系统",
+              "x": 0.78,
+              "y": 0.3,
+              "width": 0.3
+            }
+          ],
+          "edges": [
+            {
+              "from": "neuro",
+              "to": "sleep",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "via": [
+                [
+                  0.34,
+                  0.56
+                ]
+              ]
+            },
+            {
+              "from": "neuro",
+              "to": "psycho",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "via": [
+                [
+                  0.66,
+                  0.56
+                ]
+              ]
+            },
+            {
+              "from": "sleep",
+              "to": "psycho",
+              "from_anchor": "east",
+              "to_anchor": "west",
+              "via": [
+                [
+                  0.5,
+                  0.3
+                ],
+                [
+                  0.5,
+                  0.14
+                ],
+                [
+                  0.63,
+                  0.14
+                ]
+              ]
+            },
+            {
+              "from": "psycho",
+              "to": "neuro",
+              "from_anchor": "north",
+              "to_anchor": "east",
+              "dashed": true,
+              "color": "#1A4F8B",
+              "via": [
+                [
+                  0.92,
+                  0.56
+                ],
+                [
+                  0.92,
+                  0.92
+                ],
+                [
+                  0.65,
+                  0.92
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      "fig23_semantic": {
+        "expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）",
+        "forbidden_title_templates": []
+      }
+    },
+    {
+      "id": "sciatica",
+      "priority": 116,
+      "keywords": [
+        "坐骨神经痛",
+        "sciatica",
+        "腰腿痛",
+        "神经根痛"
+      ],
+      "query_aliases": {
+        "坐骨神经痛": "sciatica",
+        "腰椎间盘突出伴坐骨神经痛": "lumbar disc herniation with sciatica"
+      },
+      "fig23_layout_mode": "dual_panel",
+      "fig23_require_core_node": true,
+      "fig23_core_label_template": "{disease}\\n(神经根受压-炎症放大)",
+      "fig23_disallow_nodes": [
+        "代谢系统",
+        "营养状态"
+      ],
+      "fig23_top_to_core": [
+        "神经系统",
+        "肌肉骨骼系统",
+        "炎症免疫系统"
+      ],
+      "fig23_core_to_bottom": [
+        "睡眠系统",
+        "心理行为系统",
+        "运动功能系统"
+      ],
+      "fig23_dual_panel": {
+        "left": {
+          "title": "上游驱动与核心病理",
+          "nodes": [
+            {
+              "id": "neuro",
+              "label": "神经系统",
+              "x": 0.18,
+              "y": 0.82,
+              "width": 0.24,
+              "height": 0.11
+            },
+            {
+              "id": "msk",
+              "label": "肌肉骨骼系统",
+              "x": 0.5,
+              "y": 0.82,
+              "width": 0.28,
+              "height": 0.11
+            },
+            {
+              "id": "immune",
+              "label": "炎症免疫系统",
+              "x": 0.82,
+              "y": 0.82,
+              "width": 0.28,
+              "height": 0.11
+            },
+            {
+              "id": "core",
+              "label": "{disease}\\n(神经根受压-炎症放大)",
+              "x": 0.5,
+              "y": 0.42,
+              "width": 0.34,
+              "height": 0.14
+            }
+          ],
+          "edges": [
+            {
+              "from": "neuro",
+              "to": "core",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "±"
+            },
+            {
+              "from": "msk",
+              "to": "core",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "+"
+            },
+            {
+              "from": "immune",
+              "to": "core",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "+"
+            }
+          ]
+        },
+        "right": {
+          "title": "下游结果与管理靶点",
+          "nodes": [
+            {
+              "id": "core",
+              "label": "{disease}\\n(神经根受压-炎症放大)",
+              "x": 0.5,
+              "y": 0.82,
+              "width": 0.34,
+              "height": 0.14
+            },
+            {
+              "id": "sleep",
+              "label": "睡眠系统",
+              "x": 0.15,
+              "y": 0.3,
+              "width": 0.22,
+              "height": 0.11
+            },
+            {
+              "id": "psych",
+              "label": "心理行为系统",
+              "x": 0.5,
+              "y": 0.3,
+              "width": 0.22,
+              "height": 0.11
+            },
+            {
+              "id": "motor",
+              "label": "运动功能系统",
+              "x": 0.85,
+              "y": 0.3,
+              "width": 0.22,
+              "height": 0.11
+            }
+          ],
+          "edges": [
+            {
+              "from": "core",
+              "to": "sleep",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "via": [
+                [
+                  0.3,
+                  0.58
+                ]
+              ],
+              "sign": "+",
+              "sign_xy": [
+                0.24,
+                0.56
+              ]
+            },
+            {
+              "from": "core",
+              "to": "psych",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "+",
+              "sign_xy": [
+                0.52,
+                0.56
+              ]
+            },
+            {
+              "from": "core",
+              "to": "motor",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "via": [
+                [
+                  0.7,
+                  0.58
+                ]
+              ],
+              "sign": "+",
+              "sign_xy": [
+                0.76,
+                0.56
+              ]
+            },
+            {
+              "from": "sleep",
+              "to": "psych",
+              "from_anchor": "east",
+              "to_anchor": "west",
+              "via": [
+                [
+                  0.3,
+                  0.16
+                ],
+                [
+                  0.39,
+                  0.16
+                ]
+              ],
+              "sign": "±",
+              "dashed": true,
+              "sign_xy": [
+                0.345,
+                0.2
+              ]
+            },
+            {
+              "from": "psych",
+              "to": "motor",
+              "from_anchor": "east",
+              "to_anchor": "west",
+              "via": [
+                [
+                  0.61,
+                  0.16
+                ],
+                [
+                  0.7,
+                  0.16
+                ]
+              ],
+              "sign": "±",
+              "dashed": true,
+              "sign_xy": [
+                0.655,
+                0.2
+              ]
+            }
+          ]
+        }
+      },
+      "fig23_semantic": {
+        "expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）",
+        "forbidden_title_templates": []
+      }
+    },
+    {
+      "id": "gastritis",
+      "priority": 110,
+      "keywords": [
+        "慢性胃炎",
+        "胃炎",
+        "萎缩性胃炎",
+        "胃黏膜",
+        "幽门螺杆菌",
+        "消化不良",
+        "胃病",
+        "反流性胃炎"
+      ],
+      "query_aliases": {
+        "慢性胃炎": "chronic gastritis",
+        "萎缩性胃炎": "atrophic gastritis"
+      },
+      "fig23_layout_mode": "causal_chain",
+      "fig23_require_core_node": true,
+      "fig23_core_label_template": "{disease}\\n(胃黏膜炎症)",
+      "fig23_disallow_nodes": [
+        "代谢系统",
+        "营养状态"
+      ],
+      "fig23_top_to_core": [],
+      "fig23_core_to_bottom": [],
+      "fig23_semantic": {
+        "expected_title_template": "图表2-3：{disease}病因-病理-临床后果关系图（分层布局）",
+        "forbidden_title_templates": [
+          "图表2-3：{disease}相关系统关系图（分层布局）"
+        ]
+      }
+    },
+    {
+      "id": "respiratory",
+      "priority": 90,
+      "keywords": [
+        "咳",
+        "痰",
+        "呼吸",
+        "肺",
+        "哮喘",
+        "支气管",
+        "气道",
+        "感冒",
+        "鼻炎"
+      ],
+      "query_aliases": {
+        "儿童止咳祛痰": "pediatric cough expectorant",
+        "儿童咳嗽": "pediatric chronic cough"
+      },
+      "fig23_layout_mode": "systems_map",
+      "fig23_require_core_node": true,
+      "fig23_core_label_template": "{disease}\\n核心病理负担",
+      "fig23_disallow_nodes": [
+        "代谢系统",
+        "营养状态"
+      ],
+      "fig23_top_to_core": [
+        "神经系统",
+        "内分泌系统",
+        "免疫系统"
+      ],
+      "fig23_core_to_bottom": [
+        "呼吸系统",
+        "消化系统",
+        "肌肉骨骼系统"
+      ],
+      "fig23_semantic": {
+        "expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）",
+        "forbidden_title_templates": []
+      }
+    },
+    {
+      "id": "pharyngitis",
+      "priority": 108,
+      "keywords": [
+        "慢性咽炎",
+        "咽炎",
+        "咽喉炎",
+        "咽喉",
+        "咽部",
+        "咽痛",
+        "咽异物感"
+      ],
+      "query_aliases": {
+        "慢性咽炎": "chronic pharyngitis",
+        "慢性咽喉炎": "chronic pharyngolaryngitis"
+      },
+      "fig23_layout_mode": "systems_map",
+      "fig23_require_core_node": true,
+      "fig23_core_label_template": "{disease}\\n(咽黏膜慢性炎症)",
+      "fig23_disallow_nodes": [
+        "代谢系统",
+        "营养状态"
+      ],
+      "fig23_top_to_core": [
+        "免疫系统",
+        "神经系统",
+        "上气道微生态"
+      ],
+      "fig23_core_to_bottom": [
+        "耳鼻喉症状",
+        "睡眠系统",
+        "心理行为"
+      ],
+      "fig23_semantic": {
+        "expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）",
+        "forbidden_title_templates": []
+      }
+    },
+    {
+      "id": "anxiety",
+      "priority": 115,
+      "keywords": [
+        "焦虑障碍",
+        "焦虑症",
+        "广泛性焦虑",
+        "惊恐障碍",
+        "社交焦虑",
+        "焦虑抑郁",
+        "焦虑"
+      ],
+      "query_aliases": {
+        "焦虑障碍": "anxiety disorder",
+        "广泛性焦虑障碍": "generalized anxiety disorder",
+        "惊恐障碍": "panic disorder"
+      },
+      "fig23_layout_mode": "dual_panel",
+      "fig23_require_core_node": true,
+      "fig23_core_label_template": "{disease}\n(神经-内分泌-免疫失衡)",
+      "fig23_disallow_nodes": [
+        "代谢系统",
+        "营养状态",
+        "肾脏系统"
+      ],
+      "fig23_top_to_core": [
+        "神经系统",
+        "内分泌系统",
+        "免疫系统"
+      ],
+      "fig23_core_to_bottom": [
+        "睡眠系统",
+        "心血管系统",
+        "消化系统"
+      ],
+      "fig23_dual_panel": {
+        "left": {
+          "title": "病理驱动层",
+          "nodes": [
+            {
+              "id": "neuro",
+              "label": "神经系统\n(杏仁核-前额叶回路)",
+              "x": 0.2,
+              "y": 0.78,
+              "width": 0.34
+            },
+            {
+              "id": "endo",
+              "label": "内分泌系统\n(HPA轴)",
+              "x": 0.5,
+              "y": 0.78,
+              "width": 0.3
+            },
+            {
+              "id": "immune",
+              "label": "免疫系统\n(低度炎症)",
+              "x": 0.8,
+              "y": 0.78,
+              "width": 0.3
+            },
+            {
+              "id": "core",
+              "label": "{disease}\n核心病理负担",
+              "x": 0.5,
+              "y": 0.3,
+              "width": 0.36
+            }
+          ],
+          "edges": [
+            {
+              "from": "neuro",
+              "to": "core",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "+",
+              "color": "#2B6CB0"
+            },
+            {
+              "from": "endo",
+              "to": "core",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "+",
+              "color": "#2B6CB0"
+            },
+            {
+              "from": "immune",
+              "to": "core",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "+",
+              "color": "#2B6CB0"
+            },
+            {
+              "from": "core",
+              "to": "endo",
+              "from_anchor": "north",
+              "to_anchor": "south",
+              "dashed": true,
+              "sign": "±",
+              "color": "#2C7A7B",
+              "via": [
+                [
+                  0.58,
+                  0.58
+                ]
+              ]
+            },
+            {
+              "from": "core",
+              "to": "immune",
+              "from_anchor": "east",
+              "to_anchor": "south",
+              "dashed": true,
+              "sign": "±",
+              "color": "#2C7A7B",
+              "via": [
+                [
+                  0.74,
+                  0.58
+                ]
+              ]
+            }
+          ]
+        },
+        "right": {
+          "title": "临床后果层",
+          "nodes": [
+            {
+              "id": "core",
+              "label": "{disease}\n症状负担",
+              "x": 0.5,
+              "y": 0.78,
+              "width": 0.3
+            },
+            {
+              "id": "sleep",
+              "label": "睡眠系统",
+              "x": 0.2,
+              "y": 0.3,
+              "width": 0.26
+            },
+            {
+              "id": "cardio",
+              "label": "心血管系统",
+              "x": 0.5,
+              "y": 0.3,
+              "width": 0.26
+            },
+            {
+              "id": "digest",
+              "label": "消化系统",
+              "x": 0.8,
+              "y": 0.3,
+              "width": 0.26
+            },
+            {
+              "id": "behavior",
+              "label": "认知-行为回避",
+              "x": 0.5,
+              "y": 0.1,
+              "width": 0.34
+            }
+          ],
+          "edges": [
+            {
+              "from": "core",
+              "to": "sleep",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "+",
+              "color": "#2B6CB0"
+            },
+            {
+              "from": "core",
+              "to": "cardio",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "+",
+              "color": "#2B6CB0"
+            },
+            {
+              "from": "core",
+              "to": "digest",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "+",
+              "color": "#2B6CB0"
+            },
+            {
+              "from": "core",
+              "to": "behavior",
+              "from_anchor": "south",
+              "to_anchor": "north",
+              "sign": "+",
+              "color": "#2B6CB0"
+            },
+            {
+              "from": "behavior",
+              "to": "core",
+              "from_anchor": "north",
+              "to_anchor": "south",
+              "dashed": true,
+              "sign": "+",
+              "color": "#2C7A7B"
+            }
+          ]
+        }
+      },
+      "fig23_semantic": {
+        "expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）",
+        "forbidden_title_templates": []
+      }
+    },
+    {
+      "id": "osteoarthritis",
+      "priority": 112,
+      "keywords": [
+        "骨关节炎",
+        "膝骨关节炎",
+        "髋骨关节炎",
+        "退行性关节炎",
+        "osteoarthritis",
+        "OA"
+      ],
+      "query_aliases": {
+        "骨关节炎": "osteoarthritis",
+        "膝骨关节炎": "knee osteoarthritis"
+      },
+      "fig23_layout_mode": "systems_map",
+      "fig23_require_core_node": true,
+      "fig23_core_label_template": "{disease}\\n(关节软骨退变)",
+      "fig23_disallow_nodes": [
+        "代谢系统",
+        "营养状态"
+      ],
+      "fig23_top_to_core": [
+        "免疫系统",
+        "神经系统",
+        "肌肉骨骼系统"
+      ],
+      "fig23_core_to_bottom": [
+        "运动功能",
+        "睡眠系统",
+        "心理行为"
+      ],
+      "fig23_semantic": {
+        "expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）",
+        "forbidden_title_templates": []
+      }
+    },
+    {
+      "id": "generic",
+      "priority": 0,
+      "keywords": [],
+      "query_aliases": {},
+      "fig23_layout_mode": "systems_map",
+      "fig23_require_core_node": true,
+      "fig23_core_label_template": "{disease}\\n核心病理负担",
+      "fig23_disallow_nodes": [
+        "代谢系统",
+        "营养状态"
+      ],
+      "fig23_top_to_core": [
+        "神经系统",
+        "内分泌系统",
+        "免疫系统"
+      ],
+      "fig23_core_to_bottom": [
+        "睡眠系统",
+        "心血管系统",
+        "消化系统"
+      ],
+      "fig23_semantic": {
+        "expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）",
+        "forbidden_title_templates": []
+      }
+    }
+  ]
+}

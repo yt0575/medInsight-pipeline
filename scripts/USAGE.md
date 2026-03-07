@@ -1,78 +1,62 @@
-# Pipeline Usage
+# Usage
 
-## One-command full run
-
-```powershell
-python scripts/run_pipeline.py --disease "<疾病名>" --stage all
-```
-
-Or run with lightweight single-process role mode:
+## 单主题运行
 
 ```powershell
-python scripts/run_pipeline.py --disease "<疾病名>" --role all
+python scripts/run_pipeline.py --topic "肠黏膜修复"
 ```
 
-Or run directly from README disease config:
+默认会读取：
+
+- `data/肠黏膜修复.xlsx`
+
+默认会输出到：
+
+- `autofile/肠黏膜修复/`
+
+## 批量运行
 
 ```powershell
-python scripts/run_pipeline.py --from-readme --role all
+python scripts/run_pipeline.py --all-topics
 ```
 
-Optional arguments:
+脚本会遍历 `data/*.xlsx`，并按文件名 stem 作为医学主题名逐份生成。
 
-- `--xlsx "<疾病名>第四章数据.xlsx"`: override default chapter-4 excel path
-- `--template "template.docx"`: override Word template
-- `--out-base "autofile"`: override output root
-- `--reuse-text` / `--no-reuse-text`: stage3 reuse existing `ch01~ch07` + `summary` by default; disable reuse to regenerate
-- `--role "all/evidence/content/docx/qa"`: role mode (higher priority than `--stage`)
-- `--from-readme`: read disease name from `README.md` line `疾病名：...` when `--disease` is omitted
-- `--readme "README.md"`: override README path used by `--from-readme`
+## 参数说明
 
-## Run by stages
+- `--topic "<医学主题>"`：主参数，指定医学主题
+- `--disease "<医学主题>"`：兼容旧参数，等同于 `--topic`
+- `--all-topics`：遍历 `data` 目录下全部 `*.xlsx`
+- `--data-dir "data"`：批量模式的数据目录
+- `--from-readme`：从 `README.md` 读取 `医学主题：`；同时兼容旧的 `疾病名：`
+- `--readme "README.md"`：指定读取配置的 README
+- `--xlsx "data/<医学主题>.xlsx"`：覆盖默认 Excel 路径
+- `--template "template.docx"`：覆盖模板路径
+- `--out-base "autofile"`：覆盖输出根目录
+- `--lite-output`：清理中间产物，仅保留最终 docx、QA 与日志
 
-```powershell
-# Stage 1: evidence + refs
-python scripts/run_pipeline.py --disease "<疾病名>" --stage 1
+若某个 Excel 只包含 `医院品类/医院top`，脚本会自动把缺失的药店端/线上端季度值按 `0` 补齐，并将缺失渠道的 Top10/CR5 保持为空，同时在 `ch04_sheet_map.txt` 中标记。
 
-# Stage 2: chapter text + txt QA
-python scripts/run_pipeline.py --disease "<疾病名>" --stage 2
+## 自动补齐行为
 
-# Stage 3: chapter-4 data line + figures + manifests
-python scripts/run_pipeline.py --disease "<疾病名>" --stage 3
+为满足“一键全自动”，脚本在缺失以下文件时会自动生成：
 
-# Stage 4: assemble final docx from existing artifacts
-python scripts/run_pipeline.py --disease "<疾病名>" --stage 4
+- `00_evidence.txt`
+- `refs.txt`
+- `ch04_codex_extract.json`
+- `fig23_codex_spec.json`
+- `ch01.txt` ~ `ch07.txt`
+- `summary.txt`
 
-# Stage 5: final QA
-python scripts/run_pipeline.py --disease "<疾病名>" --stage 5
-```
+## 验收输出
 
-## Run by roles (single process, sequential)
+单主题运行后重点检查：
 
-```powershell
-# Evidence Agent (stage1)
-python scripts/run_pipeline.py --disease "<疾病名>" --role evidence
+- `autofile/<医学主题>/《<医学主题>市场分析报告》_final.docx`
+- `autofile/<医学主题>/qa_check.txt`
 
-# Content Agent (stage2+stage3)
-python scripts/run_pipeline.py --disease "<疾病名>" --role content
+批量运行后重点检查：
 
-# Docx Agent (stage4)
-python scripts/run_pipeline.py --disease "<疾病名>" --role docx
+- `autofile/batch_report_summary.csv`
 
-# QA Agent (stage5)
-python scripts/run_pipeline.py --disease "<疾病名>" --role qa
-```
-
-## Backward-compatible entry
-
-`generate_report.py` is now configurable:
-
-```powershell
-python generate_report.py --disease "<疾病名>" --stage all
-```
-
-Implementation modules:
-
-- `pipeline/core.py`: core generation + QA logic
-- `scripts/run_pipeline.py`: unified script entry for stage mode and role mode
-
+若某个主题失败，汇总表中会给出失败原因，CLI 也会在最后抛出汇总错误。

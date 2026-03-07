@@ -1,1 +1,1 @@
-"""Pipeline package for disease report generation."""
+"""Pipeline package for medical-topic market report generation."""

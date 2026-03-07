@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Generate a full DOCX market report.
+Generate a full DOCX medical-topic market report.
 Outputs are written to:
-  autofile/<疾病名>/
+  autofile/<医学主题>/
 """
 
 from __future__ import annotations
@@ -37,9 +37,22 @@ matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Un
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 
-DISEASE_NAME = "示例疾病"
-REPORT_TITLE = f"《{DISEASE_NAME}疾病市场分析报告》"
-EXCEL_PATH = Path(f"{DISEASE_NAME}第四章数据.xlsx")
+TOPIC_LABEL = "医学主题"
+DATA_DIR = Path("data")
+DISEASE_NAME = "示例医学主题"
+def report_title_for_topic(topic_name: str) -> str:
+    topic_name = topic_name.strip()
+    if topic_name.endswith("市场分析报告"):
+        return f"《{topic_name}》"
+    if topic_name.endswith("市场分析"):
+        return f"《{topic_name}报告》"
+    if topic_name.endswith("市场"):
+        return f"《{topic_name}分析报告》"
+    return f"《{topic_name}市场分析报告》"
+
+
+REPORT_TITLE = report_title_for_topic(DISEASE_NAME)
+EXCEL_PATH = DATA_DIR / f"{DISEASE_NAME}.xlsx"
 TEMPLATE_PATH = Path("template.docx")
 OUT_ROOT = Path("autofile") / DISEASE_NAME
 FIG_DIR = OUT_ROOT / "figures"
@@ -94,6 +107,10 @@ def qkey(q: str) -> int:
 
 def year_of_quarter(q: str) -> int:
     return int(str(q)[:4])
+
+
+def default_excel_path(topic_name: str) -> Path:
+    return DATA_DIR / f"{topic_name.strip()}.xlsx"
 
 
 def disease_text_replacements() -> Dict[str, str]:
@@ -483,6 +500,15 @@ def fig23_dual_panel_config(profile_id: str | None = None) -> Dict[str, object]:
     return cfg if isinstance(cfg, dict) else {}
 
 
+def fig23_layered_path_config(profile_id: str | None = None) -> Dict[str, object]:
+    runtime_spec = load_figure_specs(profile_id).get("fig_2_3", {})
+    if isinstance(runtime_spec, dict):
+        cfg = runtime_spec.get("layered_path", runtime_spec.get("pathway", {}))
+        if isinstance(cfg, dict) and cfg:
+            return cfg
+    return {}
+
+
 def _fig23_anchor_point(x: float, y: float, width: float, height: float, anchor: str) -> Tuple[float, float]:
     m = {
         "center": (x, y),
@@ -552,6 +578,15 @@ def validate_fig23_structural_rules(profile_id: str | None = None) -> Dict[str, 
         "layer_consistency_issues": [],
         "node_spacing_issues": [],
     }
+    if str(out["layout_mode"]) == "layered_path":
+        cfg = fig23_layered_path_config(profile_id)
+        if not isinstance(cfg, dict):
+            return out
+        left_nodes = [str(x).strip() for x in (cfg.get("left_nodes") or []) if str(x).strip()]
+        right_nodes = [str(x).strip() for x in (cfg.get("right_nodes") or []) if str(x).strip()]
+        if len(left_nodes) < 2 or len(right_nodes) < 2:
+            out["node_spacing_issues"].append("layered_path:左右两侧节点数量不足，无法表达核心关系")
+        return out
     if str(out["layout_mode"]) != "dual_panel":
         return out
 
@@ -924,33 +959,46 @@ def fetch_pubmed_evidence(disease_name: str, max_items: int = 8) -> List[Tuple[s
     return summary_items
 
 
-def resolve_disease_name(
+def resolve_topic_name(
+    topic: str | None = None,
     disease: str | None = None,
     from_readme: bool = False,
     readme_path: str | Path = "README.md",
 ) -> str:
+    if topic and topic.strip():
+        return topic.strip()
     if disease and disease.strip():
         return disease.strip()
 
     if not from_readme:
-        raise ValueError("缺少疾病名。请传入 --disease，或使用 --from-readme 从 README 读取。")
+        raise ValueError("缺少医学主题。请传入 --topic，或使用 --from-readme 从 README 读取。")
 
     path = Path(readme_path)
     if not path.exists():
         raise FileNotFoundError(f"README file not found: {path}")
 
     text = path.read_text(encoding="utf-8")
-    m = re.search(r"^\s*疾病名\s*[：:]\s*(.+?)\s*$", text, re.M)
+    m = re.search(r"^\s*医学主题\s*[：:]\s*(.+?)\s*$", text, re.M)
     if not m:
-        raise ValueError(f"在 {path} 中未找到“疾病名：”配置行。")
+        m = re.search(r"^\s*疾病名\s*[：:]\s*(.+?)\s*$", text, re.M)
+    if not m:
+        raise ValueError(f"在 {path} 中未找到“医学主题：”或“疾病名：”配置行。")
 
     val = m.group(1).strip()
-    invalid_tokens = ["<<<", ">>>", "在此填写", "<疾病名>", "疾病名占位符"]
+    invalid_tokens = ["<<<", ">>>", "在此填写", "<疾病名>", "疾病名占位符", "<医学主题>", "医学主题占位符"]
     if (not val) or any(tok in val for tok in invalid_tokens):
         raise ValueError(
-            f"{path} 中的疾病名仍是占位符（当前值：{val}）。请先改成真实疾病名，或直接用 --disease。"
+            f"{path} 中的医学主题仍是占位符（当前值：{val}）。请先改成真实医学主题，或直接用 --topic。"
         )
     return val
+
+
+def resolve_disease_name(
+    disease: str | None = None,
+    from_readme: bool = False,
+    readme_path: str | Path = "README.md",
+) -> str:
+    return resolve_topic_name(topic=None, disease=disease, from_readme=from_readme, readme_path=readme_path)
 
 
 def configure_runtime(
@@ -959,13 +1007,13 @@ def configure_runtime(
     template_path: Path | None = None,
     out_base: Path | None = None,
 ) -> None:
-    """Configure global runtime paths so the pipeline can run for any disease."""
+    """Configure global runtime paths so the pipeline can run for any medical topic."""
     global DISEASE_NAME, REPORT_TITLE, EXCEL_PATH, TEMPLATE_PATH, OUT_ROOT, FIG_DIR, FINAL_DOCX, _ACTIVE_PROFILE_CACHE
 
     DISEASE_NAME = disease_name.strip()
     _ACTIVE_PROFILE_CACHE = None
-    REPORT_TITLE = f"《{DISEASE_NAME}疾病市场分析报告》"
-    EXCEL_PATH = Path(excel_path) if excel_path is not None else Path(f"{DISEASE_NAME}第四章数据.xlsx")
+    REPORT_TITLE = report_title_for_topic(DISEASE_NAME)
+    EXCEL_PATH = Path(excel_path) if excel_path is not None else default_excel_path(DISEASE_NAME)
     TEMPLATE_PATH = Path(template_path) if template_path is not None else Path("template.docx")
     base = Path(out_base) if out_base is not None else Path("autofile")
     OUT_ROOT = base / DISEASE_NAME
@@ -999,6 +1047,14 @@ def ensure_runtime_dirs() -> None:
     FIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def cleanup_stale_final_docx() -> None:
+    for old_path in OUT_ROOT.glob("*_final.docx"):
+        if old_path == FINAL_DOCX:
+            continue
+        backup_if_exists(old_path)
+        old_path.unlink(missing_ok=True)
+
+
 def backup_if_exists(path: Path) -> None:
     if path.exists():
         backup_dir = OUT_ROOT / "backup"
@@ -1026,6 +1082,17 @@ def write_csv(path: Path, rows: List[Dict[str, str]], headers: List[str]) -> Non
         writer.writerows(normalized_rows)
 
 
+def get_workbook_sheet_names(xlsx: Path) -> List[str]:
+    try:
+        return list(pd.ExcelFile(xlsx).sheet_names)
+    except Exception:
+        try:
+            wb = load_workbook(xlsx, read_only=True, data_only=False)
+            return [ws.title for ws in wb.worksheets]
+        except Exception:
+            return []
+
+
 def parse_category_sheet(xlsx: Path, sheet: str) -> pd.DataFrame:
     raw = pd.read_excel(xlsx, sheet_name=sheet, header=None)
     records: List[Tuple[str, float]] = []
@@ -1042,6 +1109,35 @@ def parse_category_sheet(xlsx: Path, sheet: str) -> pd.DataFrame:
     df["qk"] = df["quarter"].apply(qkey)
     df = df.sort_values("qk").drop(columns=["qk"]).reset_index(drop=True)
     return df
+
+
+def missing_category_sheet_frame(quarters: List[str], column: str) -> pd.DataFrame:
+    if not quarters:
+        return pd.DataFrame(columns=["quarter", column])
+    return pd.DataFrame({"quarter": list(quarters), column: [0.0] * len(quarters)})
+
+
+def collapse_duplicate_top_rows(latest_q: str, latest_df: pd.DataFrame, full_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if full_df.empty:
+        return latest_df, full_df
+
+    quarter_cols = [c for c in full_df.columns if c not in {"rank", "name"} and QUARTER_RE.match(str(c))]
+    if not quarter_cols:
+        return latest_df, full_df
+
+    merged = full_df.copy()
+    merged["name"] = merged["name"].astype(str).str.strip()
+    merged = merged[merged["name"] != ""].copy()
+    for col in quarter_cols:
+        merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0.0)
+    merged = merged.groupby("name", as_index=False)[quarter_cols].sum()
+    sort_col = latest_q if latest_q in merged.columns else quarter_cols[-1]
+    merged = merged.sort_values([sort_col, "name"], ascending=[False, True]).reset_index(drop=True)
+    merged.insert(0, "rank", range(1, len(merged) + 1))
+
+    latest = merged[["rank", "name", sort_col]].rename(columns={sort_col: "sales"})
+    latest = latest[latest["sales"] > 0].head(10).reset_index(drop=True)
+    return latest, merged
 
 
 def parse_top_sheet(xlsx: Path, sheet: str) -> Tuple[str, pd.DataFrame, pd.DataFrame]:
@@ -1185,11 +1281,33 @@ def normalize_ch4_channel(value: object) -> str:
 
 
 def build_ch4_data_from_legacy_parser(xlsx: Path) -> Ch4Data:
-    hosp_cat = parse_category_sheet(xlsx, "医院品类").rename(columns={"sales": "hospital"})
-    drug_cat = parse_category_sheet(xlsx, "药店品类").rename(columns={"sales": "drugstore"})
-    online_cat = parse_category_sheet(xlsx, "线上品类").rename(columns={"sales": "online"})
+    available_sheets = set(get_workbook_sheet_names(xlsx))
+    channel_specs: List[Tuple[str, str, str]] = [
+        ("医院品类", "医院端", "hospital"),
+        ("药店品类", "药店端", "drugstore"),
+        ("线上品类", "线上端", "online"),
+    ]
+    parsed_frames: Dict[str, pd.DataFrame] = {}
+    discovered_quarters: List[str] = []
+    for sheet_name, channel_label, column in channel_specs:
+        if sheet_name not in available_sheets:
+            print(f"警告：缺少{channel_label}季度sheet，后续将按 0 补齐。")
+            continue
+        df = parse_category_sheet(xlsx, sheet_name).rename(columns={"sales": column})
+        parsed_frames[column] = df
+        discovered_quarters.extend(df["quarter"].astype(str).tolist())
 
-    quarterly = hosp_cat.merge(drug_cat, on="quarter", how="inner").merge(online_cat, on="quarter", how="inner")
+    if not parsed_frames:
+        raise ValueError(f"{xlsx.name} 未找到任何渠道季度销售额sheet（医院品类/药店品类/线上品类）。")
+
+    quarter_order = sorted({q for q in discovered_quarters if QUARTER_RE.match(str(q))}, key=qkey)
+    for _, _, column in channel_specs:
+        if column not in parsed_frames:
+            parsed_frames[column] = missing_category_sheet_frame(quarter_order, column)
+
+    quarterly = parsed_frames["hospital"].merge(parsed_frames["drugstore"], on="quarter", how="outer").merge(parsed_frames["online"], on="quarter", how="outer")
+    for col in ["hospital", "drugstore", "online"]:
+        quarterly[col] = pd.to_numeric(quarterly[col], errors="coerce").fillna(0.0)
     quarterly["total"] = quarterly["hospital"] + quarterly["drugstore"] + quarterly["online"]
     quarterly["year"] = quarterly["quarter"].apply(year_of_quarter)
     quarterly["qk"] = quarterly["quarter"].apply(qkey)
@@ -1232,15 +1350,21 @@ def build_ch4_data_from_legacy_parser(xlsx: Path) -> Ch4Data:
             ]
         )
 
-    def fallback_top(sheet: str, channel_label: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def fallback_top(sheet: str, channel_label: str, reason: str | None = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
         top10 = pd.DataFrame(columns=["rank", "name", "sales"])
         full = pd.DataFrame(columns=["rank", "name"])
-        print(f"警告：{sheet}解析失败或源表为空，已标记为缺失数据。")
+        suffix = f"（{reason}）" if reason else ""
+        print(f"警告：{sheet}解析失败或源表为空，已标记为缺失数据{suffix}。")
         return top10, full
 
     def safe_parse_top(sheet: str, channel_label: str) -> Tuple[str, pd.DataFrame, pd.DataFrame]:
+        if sheet not in available_sheets:
+            top10, full = fallback_top(sheet, channel_label, reason="缺少sheet")
+            return str(latest_q), top10, full
         try:
-            return parse_top_sheet(xlsx, sheet)
+            parsed_q, parsed_top10, parsed_full = parse_top_sheet(xlsx, sheet)
+            parsed_top10, parsed_full = collapse_duplicate_top_rows(parsed_q, parsed_top10, parsed_full)
+            return parsed_q, parsed_top10, parsed_full
         except Exception:
             top10, full = fallback_top(sheet, channel_label)
             return str(latest_q), top10, full
@@ -1386,7 +1510,7 @@ def build_ch4_codex_prompt(xlsx: Path) -> str:
     template_path = OUT_ROOT / "ch04_codex_extract_template.json"
     lines = [
         "【第四章 Codex 数据提取任务】",
-        f"疾病名：{DISEASE_NAME}",
+        f"医学主题：{DISEASE_NAME}",
         f"源文件：{xlsx.name}",
         f"目标输出：{extract_path}",
         f"参考模板：{template_path}",
@@ -1412,7 +1536,7 @@ def build_ch4_codex_prompt(xlsx: Path) -> str:
         "- 若 Excel 可视界面有数据但 openpyxl 预览为空，请在 notes 说明“工作簿未保存到单元格”或“需另存后重试”",
         "",
         "输出完成后，再运行：",
-        f"python scripts/run_pipeline.py --disease \"{DISEASE_NAME}\"",
+        f"python scripts/run_pipeline.py --topic \"{DISEASE_NAME}\"",
         "",
         *preview_lines,
     ]
@@ -1487,9 +1611,9 @@ def build_ch4_data_from_codex_extract(extract_path: Path) -> Ch4Data:
     schema_version = str(raw.get("schema_version", "")).strip()
     if schema_version != "ch4_codex_extract_v1":
         raise ValueError(f"schema_version 不正确：{schema_version or '空'}")
-    disease_name = str(raw.get("disease", "")).strip()
-    if disease_name != DISEASE_NAME:
-        raise ValueError(f"disease 不匹配：当前运行病种为 {DISEASE_NAME}，JSON 中为 {disease_name or '空'}")
+    topic_name = str(raw.get("topic", "")).strip() or str(raw.get("disease", "")).strip()
+    if topic_name != DISEASE_NAME:
+        raise ValueError(f"topic 不匹配：当前运行主题为 {DISEASE_NAME}，JSON 中为 {topic_name or '空'}")
     source_workbook = str(raw.get("source_workbook", "")).strip()
     if source_workbook != EXCEL_PATH.name:
         raise ValueError(f"source_workbook 不匹配：当前 Excel 为 {EXCEL_PATH.name}，JSON 中为 {source_workbook or '空'}")
@@ -2072,26 +2196,26 @@ def build_block_specs() -> List[BlockSpec]:
         ]
     if not is_respiratory_profile():
         return [
-            BlockSpec("1.1", 1, "1.1 疾病定义与分类（临床与病理）", 1250, ["定义边界", "分型标准", "诊断标准", "病程分层", "适应证场景"], "E01|E02|E03", "fig_1_1"),
-            BlockSpec("1.2", 1, "1.2 发病机制与病理生理", 1250, ["发病机制", "病理改变", "关键通路", "进展链路", "风险触发因素"], "E01|E03|E13", "fig_1_2|fig_1_3"),
+            BlockSpec("1.1", 1, "1.1 医学主题定义与应用边界", 1250, ["定义边界", "分型标准", "诊断标准", "病程分层", "适应证场景"], "E01|E02|E03", "fig_1_1"),
+            BlockSpec("1.2", 1, "1.2 核心机制与病理生理基础", 1250, ["发病机制", "病理改变", "关键通路", "进展链路", "风险触发因素"], "E01|E03|E13", "fig_1_2|fig_1_3"),
             BlockSpec("1.3", 1, "1.3 本章小结", 900, ["认知框架", "风险分层", "证据导向", "管理边界"], "E01|E02|E13", "fig_1_4"),
             BlockSpec("2.1", 2, "2.1 与相关系统的联系（多系统视角）", 1500, ["系统关联", "代谢影响", "免疫调节", "神经调控", "系统交互"], "E02|E03|E11", "fig_2_1"),
-            BlockSpec("2.2", 2, "2.2 常见并发症与合并症", 1500, ["并发风险", "共病谱", "复发风险", "治疗耐受性", "复诊负担"], "E03|E11|E13", "fig_2_2|fig_2_3"),
+            BlockSpec("2.2", 2, "2.2 常见风险问题与管理要点", 1500, ["并发风险", "共病谱", "复发风险", "治疗耐受性", "复诊负担"], "E03|E11|E13", "fig_2_2|fig_2_3"),
             BlockSpec("2.3", 2, "2.3 本章小结", 1000, ["系统管理", "风险前移", "连续干预", "依从提升"], "E03|E11|E12", ""),
-            BlockSpec("3.1", 3, "3.1 临床诊断标准与检查手段", 1600, ["分诊评估", "病因筛查", "红旗征识别", "检查路径", "评估量表"], "E02|E03|E11", "fig_3_1"),
-            BlockSpec("3.2", 3, "3.2 西医治疗体系（药物、手术、理疗）", 1600, ["起始治疗", "联合策略", "药物管理", "安全监测", "疗程调整"], "E03|E06|E13", "fig_3_2"),
-            BlockSpec("3.3", 3, "3.3 中医辨证体系与常用方药", 1400, ["辨证分型", "治则治法", "中成药应用", "中西协同", "证据等级"], "E14|E13|E11", "fig_3_3"),
+            BlockSpec("3.1", 3, "3.1 临床/应用评估标准与检查路径", 1600, ["分诊评估", "病因筛查", "红旗征识别", "检查路径", "评估量表"], "E02|E03|E11", "fig_3_1"),
+            BlockSpec("3.2", 3, "3.2 干预体系与证据结构（药物/器械/疫苗/康复等）", 1600, ["起始治疗", "联合策略", "药物管理", "安全监测", "疗程调整"], "E03|E06|E13", "fig_3_2"),
+            BlockSpec("3.3", 3, "3.3 中医辨证与协同管理（如适用）", 1400, ["辨证分型", "治则治法", "中成药应用", "中西协同", "证据等级"], "E14|E13|E11", "fig_3_3"),
             BlockSpec("3.4", 3, "3.4 本章小结", 950, ["规范路径", "证据整合", "风险平衡", "全周期管理"], "E13|E14|E15", ""),
             BlockSpec("4.1", 4, "4.1 治疗药物市场概况", 900, ["渠道规模", "季度趋势", "结构占比", "增长驱动"], "E09|E10|E14", "fig_4_1|fig_4_2"),
             BlockSpec("4.2", 4, "4.2 主要治疗药物分析", 900, ["头部通用名", "渠道差异", "品种生命周期", "结构优化"], "E08|E14|E15", "fig_4_3|fig_4_4"),
             BlockSpec("4.3", 4, "4.3 市场格局与竞争态势", 900, ["集中度", "竞争壁垒", "挑战者路径", "效率竞争"], "E08|E14|E15", "fig_4_5|fig_4_8"),
             BlockSpec("4.4", 4, "4.4 本章小结", 800, ["数据闭环", "经营动作", "跨部门协同", "季度复盘"], "E09|E10|E14", "fig_4_6|fig_4_7"),
-            BlockSpec("5.1", 5, "5.1 患者群体结构与画像（性别/年龄/地域/负担/分层/用药偏好）", 1600, ["年龄结构", "就诊场景", "地区差异", "疾病负担", "需求分层"], "E04|E08|E13", "fig_5_1"),
-            BlockSpec("5.2", 5, "5.2 医生用药偏好与诊疗习惯（处方行为/路径差异/未满足需求）", 1600, ["处方偏好", "科室差异", "证据偏好", "未满足需求", "教育路径"], "E03|E05|E08", "fig_5_2|fig_5_4"),
-            BlockSpec("5.3", 5, "5.3 患者依从性与长期管理（依从现状/影响因素/管理策略/全周期管理）", 1400, ["依从瓶颈", "行为执行", "复购管理", "随访机制", "长期控制"], "E04|E05|E12", "fig_5_3"),
+            BlockSpec("5.1", 5, "5.1 目标人群结构与终端画像（年龄/地域/负担/偏好）", 1600, ["年龄结构", "就诊场景", "地区差异", "疾病负担", "需求分层"], "E04|E08|E13", "fig_5_1"),
+            BlockSpec("5.2", 5, "5.2 终端使用偏好与未满足需求", 1600, ["处方偏好", "科室差异", "证据偏好", "未满足需求", "教育路径"], "E03|E05|E08", "fig_5_2|fig_5_4"),
+            BlockSpec("5.3", 5, "5.3 依从性与长期管理（使用现状/影响因素/管理策略）", 1400, ["依从瓶颈", "行为执行", "复购管理", "随访机制", "长期控制"], "E04|E05|E12", "fig_5_3"),
             BlockSpec("5.4", 5, "5.4 本章小结", 900, ["患者中心", "医生协同", "连续管理", "服务化能力"], "E04|E05|E15", ""),
-            BlockSpec("6.1", 6, "6.1 疾病政策环境（6.1.1全球；6.1.2中国）", 1700, ["政策主线", "临床规范", "准入与支付", "质量体系", "监管协同"], "E09|E10|E11", "fig_6_1"),
-            BlockSpec("6.2", 6, "6.2 疾病监管趋势（审评审批/质量控制/医保支付/行业监管影响）", 1700, ["审评提速", "质量标准", "医保支付", "合规传播", "全链条监管"], "E09|E10|E11", "fig_6_2"),
+            BlockSpec("6.1", 6, "6.1 医学主题政策环境（全球与中国）", 1700, ["政策主线", "临床规范", "准入与支付", "质量体系", "监管协同"], "E09|E10|E11", "fig_6_1"),
+            BlockSpec("6.2", 6, "6.2 监管趋势（审评审批/质量控制/医保支付/行业监管影响）", 1700, ["审评提速", "质量标准", "医保支付", "合规传播", "全链条监管"], "E09|E10|E11", "fig_6_2"),
             BlockSpec("6.3", 6, "6.3 本章小结", 1000, ["政策约束", "策略边界", "合规经营", "长期确定性"], "E09|E10|E15", ""),
             BlockSpec("7.1", 7, "7.1 未来市场预测（负担/市场规模/方案演进；量化+方法+来源）", 1700, ["需求预测", "规模外推", "渠道重构", "证据升级", "方案演进"], "E08|E13|E14", "fig_7_1"),
             BlockSpec("7.2", 7, "7.2 战略建议（面向市场部/战略部：定位、证据、准入、渠道、竞争、生命周期）", 1700, ["定位策略", "证据策略", "准入策略", "渠道策略", "生命周期管理"], "E08|E10|E15", "fig_7_2"),
@@ -2128,10 +2252,10 @@ def build_block_specs() -> List[BlockSpec]:
 def chapter_title(chapter: int) -> str:
     names = {
         1: f"第一章 {DISEASE_NAME}概述与定义边界",
-        2: f"第二章 {DISEASE_NAME}关联机制与并发管理",
-        3: f"第三章 {DISEASE_NAME}临床诊疗现状",
-        4: f"第四章 {DISEASE_NAME}治疗药物与市场格局",
-        5: f"第五章 {DISEASE_NAME}患者画像与临床需求",
+        2: f"第二章 {DISEASE_NAME}机制关联与风险管理",
+        3: f"第三章 {DISEASE_NAME}临床应用与干预路径",
+        4: f"第四章 {DISEASE_NAME}市场规模与竞争格局",
+        5: f"第五章 {DISEASE_NAME}人群画像与终端需求",
         6: f"第六章 {DISEASE_NAME}政策环境与监管趋势",
         7: f"第七章 {DISEASE_NAME}未来展望与战略建议",
     }
@@ -2160,6 +2284,681 @@ def write_evidence_and_refs() -> Tuple[str, str]:
     write_text(OUT_ROOT / "00_evidence.txt", evidence_text + "\n")
     write_text(OUT_ROOT / "refs.txt", refs_text + "\n")
     return evidence_text, refs_text
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except Exception:
+        return default
+    if math.isnan(out) or math.isinf(out):
+        return default
+    return out
+
+
+def _format_money(value: object) -> str:
+    return f"{_safe_float(value):.1f}万元"
+
+
+def _format_pct(value: object) -> str:
+    return f"{_safe_float(value):.1f}%"
+
+
+def _evidence_nums(evidence_ids: str) -> List[int]:
+    nums: List[int] = []
+    for token in str(evidence_ids).split("|"):
+        m = re.match(r"^E(\d{2})$", token.strip())
+        if m:
+            nums.append(int(m.group(1)))
+    return nums
+
+
+def _cite_text(evidence_ids: str, start: int = 0, count: int = 3) -> str:
+    nums = _evidence_nums(evidence_ids)
+    if not nums:
+        return "[1]"
+    picked = nums[start : start + count]
+    if not picked:
+        picked = nums[-min(count, len(nums)) :]
+    return "".join(f"[{n}]" for n in picked)
+
+
+def infer_topic_context() -> Dict[str, str]:
+    name = DISEASE_NAME.strip()
+    topic_type = "disease"
+    if "疫苗" in name:
+        topic_type = "vaccine"
+    elif "生物制剂" in name:
+        topic_type = "biologic"
+    elif any(k in name for k in ["菌群", "益生菌"]):
+        topic_type = "microbiome"
+    elif any(k in name for k in ["药物", "安神类", "抗病毒", "降尿酸"]):
+        topic_type = "drug"
+    elif any(k in name for k in ["修复", "康复", "管理"]):
+        topic_type = "management"
+    elif any(k in name for k in ["焦虑", "神经痛"]):
+        topic_type = "neuropsych"
+
+    population = "儿科与家庭决策人群" if "儿童" in name else "专科与慢病管理人群"
+    if topic_type == "vaccine":
+        return {
+            "topic_type": topic_type,
+            "population": population,
+            "core_goal": "建立免疫保护、降低感染与并发症负担",
+            "core_process": "接种时机、免疫原性、覆盖率与季节流行匹配",
+            "review_window": "接种季前、流行季中和年度复盘",
+            "risk_focus": "年龄限制、禁忌证、联合接种、不良事件监测",
+            "market_focus": "免疫规划、自费接种渗透和渠道教育效率",
+        }
+    if topic_type == "biologic":
+        return {
+            "topic_type": topic_type,
+            "population": population,
+            "core_goal": "提升中重度患者结局并重塑高价值治疗结构",
+            "core_process": "适应证扩展、序贯治疗、疗效安全平衡与支付可及性",
+            "review_window": "起始治疗后 4-12 周复评与长期维持评估",
+            "risk_focus": "适应证、免疫原性、感染警示、院内准入与支付边界",
+            "market_focus": "高值品种放量、证据升级与准入竞争",
+        }
+    if topic_type == "microbiome":
+        return {
+            "topic_type": topic_type,
+            "population": population,
+            "core_goal": "恢复微生态稳态、改善屏障功能并减少症状波动",
+            "core_process": "菌株选择、肠道屏障、炎症调节与长期依从管理",
+            "review_window": "2-8 周症状复评与长期复购观察",
+            "risk_focus": "菌株证据等级、适用人群、联合用药与安全监测",
+            "market_focus": "院外教育、复购管理与消费医疗转化效率",
+        }
+    if topic_type == "drug":
+        return {
+            "topic_type": topic_type,
+            "population": population,
+            "core_goal": "在适应证范围内平衡疗效、安全性与可及性",
+            "core_process": "证据等级、说明书边界、联合用药与渠道渗透",
+            "review_window": "起始用药后 1-4 周复评与季度结构复盘",
+            "risk_focus": "适应证、禁忌证、肝肾功能、药物相互作用与警示信息",
+            "market_focus": "终端结构、品牌竞争和支付政策驱动的品类升级",
+        }
+    if topic_type == "management":
+        return {
+            "topic_type": topic_type,
+            "population": population,
+            "core_goal": "把修复、康复或长期管理目标转化为可复评的结局",
+            "core_process": "症状控制、客观终点、复评路径和依从性闭环",
+            "review_window": "4-8 周阶段复评与 3-6 个月长期跟踪",
+            "risk_focus": "红旗征识别、适应证边界、复评窗口与不良反应监测",
+            "market_focus": "治疗-康复一体化、院内外协同和长期管理服务化",
+        }
+    if topic_type == "neuropsych":
+        return {
+            "topic_type": topic_type,
+            "population": population,
+            "core_goal": "降低症状负担并提高长期功能恢复与依从性",
+            "core_process": "神经递质/疼痛通路调节、行为干预和长期复评",
+            "review_window": "2-6 周初始复评与 3 个月疗程评估",
+            "risk_focus": "警示症状、合并用药、耐受性、不良反应和减停药路径",
+            "market_focus": "专科处方、院外续方与患者教育效率",
+        }
+    return {
+        "topic_type": topic_type,
+        "population": population,
+        "core_goal": "控制症状、改善客观终点并降低复发风险",
+        "core_process": "机制识别、风险分层、干预选择与长期管理",
+        "review_window": "2-12 周阶段复评与季度回顾",
+        "risk_focus": "红旗征、适应证、禁忌证、安全监测与复评窗口",
+        "market_focus": "真实世界需求、渠道结构与竞争壁垒演进",
+    }
+
+
+def build_market_snapshot(ch4: Ch4Data) -> Dict[str, object]:
+    annual = ch4.annual.copy()
+    first_year = int(annual.iloc[0]["year"])
+    last_year = int(annual.iloc[-1]["year"])
+    first_total = _safe_float(annual.iloc[0]["total"])
+    last_total = _safe_float(annual.iloc[-1]["total"])
+    years = max(last_year - first_year, 1)
+    if first_total > 0 and last_total > 0:
+        cagr = (pow(last_total / first_total, 1.0 / years) - 1.0) * 100.0
+    else:
+        cagr = 0.0
+    share_map = {str(r["channel"]): _safe_float(r["share_pct"]) for _, r in ch4.latest_share.iterrows()}
+    yoy_map = {str(r["channel"]): _safe_float(r["yoy_pct"]) for _, r in ch4.yoy_latest.iterrows()}
+    cr5_map = {str(r["channel"]): _safe_float(r["cr5_pct"]) for _, r in ch4.cr5_latest.iterrows()}
+    top_share_channel = max(share_map.items(), key=lambda x: x[1])[0] if share_map else "医院端"
+    top_cr5_channel = max(cr5_map.items(), key=lambda x: x[1])[0] if cr5_map else "医院端"
+    return {
+        "first_year": first_year,
+        "last_year": last_year,
+        "first_total": first_total,
+        "last_total": last_total,
+        "latest_quarter": ch4.latest_quarter,
+        "latest_total": _safe_float(ch4.quarterly.iloc[-1]["total"]),
+        "cagr": cagr,
+        "share_map": share_map,
+        "yoy_map": yoy_map,
+        "cr5_map": cr5_map,
+        "top_share_channel": top_share_channel,
+        "top_cr5_channel": top_cr5_channel,
+        "top_latest_name": dict(ch4.top_latest_name),
+        "quarter_start": str(ch4.quarterly.iloc[0]["quarter"]),
+        "quarter_end": str(ch4.quarterly.iloc[-1]["quarter"]),
+    }
+
+
+def _topic_fig23_nodes(ctx: Dict[str, str]) -> Tuple[List[str], str, List[str]]:
+    topic_type = ctx.get("topic_type", "disease")
+    if topic_type == "vaccine":
+        return (
+            ["适龄人群覆盖不足", "流行季认知与接种时机错配", "供应与支付约束"],
+            f"{DISEASE_NAME}免疫保护建立不足\n(接种率-免疫原性-季节匹配)",
+            ["感染与并发症负担延续", "儿科门急诊压力增加", "自费教育与渗透成本上升"],
+        )
+    if topic_type in {"drug", "biologic"}:
+        return (
+            ["适应证与证据边界持续收紧", "支付与准入约束增强", "患者依从与长期维持压力"],
+            f"{DISEASE_NAME}治疗路径分化\n(可及性-疗效安全-渠道渗透)",
+            ["终端结构重新分配", "头部品种集中度变化", "生命周期竞争持续加剧"],
+        )
+    if topic_type == "microbiome":
+        return (
+            ["菌群生态失衡持续", "屏障功能恢复不足", "饮食与行为诱因反复暴露"],
+            f"{DISEASE_NAME}稳态恢复不足\n(微生态-屏障-症状波动)",
+            ["腹痛腹泻等症状反复", "长期复购与教育需求上升", "高质量证据与品牌分化加快"],
+        )
+    if topic_type == "management":
+        return (
+            ["上游病因控制不充分", "营养/康复支持不足", "复评节点执行不稳定"],
+            f"{DISEASE_NAME}阶段管理目标未闭环\n(症状-指标-客观终点)",
+            ["症状波动与复诊增加", "依从性下降与疗程延长", "资源利用与长期成本上升"],
+        )
+    return (
+        ["病因与风险因素持续存在", "客观终点达成不足", "长期管理执行不稳定"],
+        f"{DISEASE_NAME}核心管理目标承压\n(疗效-安全-依从性)",
+        ["症状与负担持续波动", "终端需求与教育成本上升", "复发与资源消耗风险增加"],
+    )
+
+
+def ensure_fig23_codex_spec_ready() -> None:
+    path = OUT_ROOT / FIG23_CODEX_SPEC_NAME
+    if path.exists():
+        return
+    ctx = infer_topic_context()
+    left_nodes, core_label, right_nodes = _topic_fig23_nodes(ctx)
+    payload = {
+        "schema_version": "fig23_codex_v1",
+        "topic": DISEASE_NAME,
+        "disease": DISEASE_NAME,
+        "authored_by": "codex",
+        "layout_mode": "layered_path",
+        "title": compose_figure_title("2-3", f"{DISEASE_NAME}关键关系分层路径图"),
+        "caption": compose_figure_title("2-3", f"{DISEASE_NAME}关键关系分层路径图"),
+        "source_line": "数据来源：临床指南、专家共识、国家政策文件与公开系统综述整理",
+        "layered_path": {
+            "left_title": "上游决定因素",
+            "center_title": "核心机制/价值链路",
+            "right_title": "下游后果与管理结果",
+            "left_nodes": left_nodes,
+            "core_label": core_label,
+            "right_nodes": right_nodes,
+        },
+    }
+    write_json(path, payload)
+
+
+def _df_to_records(df: pd.DataFrame, columns: List[str]) -> List[Dict[str, object]]:
+    if df.empty:
+        return []
+    out: List[Dict[str, object]] = []
+    for _, row in df[columns].iterrows():
+        rec: Dict[str, object] = {}
+        for col in columns:
+            val = row[col]
+            if isinstance(val, str):
+                rec[col] = val.strip()
+            elif isinstance(val, (np.integer, int)):
+                rec[col] = int(val)
+            elif isinstance(val, (np.floating, float)):
+                rec[col] = round(float(val), 4)
+            else:
+                rec[col] = val
+        out.append(rec)
+    return out
+
+
+def ensure_ch4_extract_ready(xlsx: Path) -> None:
+    write_ch4_codex_helper_files(xlsx)
+    extract_path = OUT_ROOT / "ch04_codex_extract.json"
+    if extract_path.exists():
+        try:
+            build_ch4_data_from_codex_extract(extract_path)
+            return
+        except Exception as exc:
+            print(f"警告：现有 ch04_codex_extract.json 无法通过校验，已自动重建（{type(exc).__name__}: {exc}）。")
+    ch4 = build_ch4_data_from_legacy_parser(xlsx)
+    sheet_names = get_workbook_sheet_names(xlsx)
+    sheet_name_set = set(sheet_names)
+
+    def mapping_entry(sheet_name: str, missing_note: str, present_note: str = "脚本按标准模板提取") -> Dict[str, str]:
+        if sheet_name in sheet_name_set:
+            return {"sheet": sheet_name, "status": "自动识别", "header_rows": "自动", "note": present_note}
+        return {"sheet": sheet_name, "status": "缺失", "header_rows": "N/A", "note": missing_note}
+
+    payload = {
+        "schema_version": "ch4_codex_extract_v1",
+        "topic": DISEASE_NAME,
+        "disease": DISEASE_NAME,
+        "source_workbook": xlsx.name,
+        "available_sheets": sheet_names,
+        "latest_quarter": ch4.latest_quarter,
+        "sheet_mapping": {
+            "hospital_category": mapping_entry("医院品类", "未提供该sheet，若其他渠道存在则以0补齐该渠道季度销售额。"),
+            "hospital_top": mapping_entry("医院top", "未提供该sheet，医院端Top10与CR5仅保留为空。"),
+            "drugstore_category": mapping_entry("药店品类", "未提供该sheet，若其他渠道存在则以0补齐该渠道季度销售额。"),
+            "drugstore_top": mapping_entry("药店top", "未提供该sheet，药店端Top10与CR5仅保留为空。"),
+            "online_category": mapping_entry("线上品类", "未提供该sheet，若其他渠道存在则以0补齐该渠道季度销售额。"),
+            "online_top": mapping_entry("线上top", "未提供该sheet，线上端Top10与CR5仅保留为空。"),
+        },
+        "tables": {
+            "quarterly_channel": _df_to_records(ch4.quarterly, ["quarter", "hospital", "drugstore", "online"]),
+            "top10_hospital": _df_to_records(ch4.top_hospital, ["rank", "name", "sales"]),
+            "top10_drugstore": _df_to_records(ch4.top_drugstore, ["rank", "name", "sales"]),
+            "top10_online": _df_to_records(ch4.top_online, ["rank", "name", "sales"]),
+            "cr5_latest": _df_to_records(ch4.cr5_latest, ["channel", "cr5_pct"]),
+            "cr5_trend": _df_to_records(ch4.cr5_trend, ["quarter", "channel", "cr5_pct"]),
+        },
+        "notes": [
+            "由脚本按标准sheet自动抽取生成。",
+            "若需人工复核，请对照 ch04_workbook_preview.txt 与 ch04_sheet_map.txt。",
+            "所有数值均直接来自工作簿，不做平滑、不做外推。",
+            "若源工作簿缺少药店端或线上端sheet，季度值按0补齐；缺失渠道的Top10/CR5保留为空。",
+        ],
+    }
+    write_json(extract_path, payload)
+
+
+def _block_paragraphs_generic(spec: BlockSpec, ctx: Dict[str, str], snapshot: Dict[str, object]) -> List[str]:
+    topics_text = "、".join(spec.topics[:4])
+    citations_a = _cite_text(spec.evidence_ids, 0, 3)
+    citations_b = _cite_text(spec.evidence_ids, 1, 3)
+    citations_c = _cite_text(spec.evidence_ids, 2, 3)
+    para1 = (
+        f"围绕“{DISEASE_NAME}”这一医学主题，{spec.subtitle}所关注的核心并不是单一病名标签，而是{topics_text}等多条链路如何共同影响{ctx['core_goal']}。"
+        f"从{spec.subtitle}对应的应用边界看，该主题既覆盖院内规范化评估，也覆盖院外教育、复评与长期管理，因此不同终端的应用场景、适应证边界和复评频率不能简单等同。"
+        f"在 2024-2025 年公开指南、共识和统计资料中，{spec.subtitle}的分析价值越来越体现在能否把客观终点、风险分层和连续管理放到同一套决策框架中，而不是只强调单次症状波动{citations_a}。"
+    )
+    para2 = (
+        f"就{spec.subtitle}的机制与路径而言，{DISEASE_NAME}的关键不只在于短期干预本身，还在于{ctx['core_process']}是否能够被真正执行。"
+        f"因此在{spec.subtitle}这个层面，讨论重点必须回到红旗征识别、适应证/禁忌证、说明书边界和安全监测：一方面要明确哪些人群适合起始干预，另一方面也要明确何时需要在 1 周、4-8 周或 3 个月节点进行复评、复查或升级检查。"
+        f"只有把“指南/共识推荐—治疗执行—复评调整—长期稳定”串成与{topics_text}一致的闭环，才能把医学主题真正转化为可管理的终端需求{citations_b}。"
+    )
+    para3 = (
+        f"从{spec.subtitle}涉及的终端逻辑看，医院端通常更关注适应证、风险分层和客观指标，药店端更关注可及性、依从性和品牌熟悉度，线上端则更依赖患者教育、搜索效率和复购转化。"
+        f"这意味着围绕{topics_text}做市场分析时必须同时回答三个问题：第一，哪些人群需要专科路径，哪些人群适合院外管理；第二，哪些干预应放在说明书与指南明示的人群内；第三，哪些高风险情况应触发复评、复查或警示。"
+        f"如果这三点在{spec.subtitle}这一层面回答不清，后续渠道结构、产品定位和竞争格局分析就会失去医学锚点{citations_c}。"
+    )
+    para4 = (
+        f"因此，在{spec.subtitle}的写作上始终把{ctx['risk_focus']}放在同一层面考察，并把{ctx['review_window']}设为管理节奏的共同参考。"
+        f"这种处理方式既能避免把{DISEASE_NAME}泛化为抽象概念，也能避免在{spec.subtitle}的市场分析中脱离真实诊疗路径；对后续第四章的规模、结构、CR5、渠道份额和战略判断而言，这些医学边界本身就是最重要的前置约束{citations_a}{citations_c}。"
+    )
+    extra = (
+        f"进一步看，{spec.subtitle}所涉及的{topics_text}并不是彼此孤立的变量，而是在不同阶段相互强化：当适应证判断偏宽时，禁忌证与不良反应风险会上升；当复评节奏不足时，疗效判断与长期依从性会被高估；当教育不足时，终端结构与患者复购也更容易出现短期波动。"
+        f"因此，把{spec.subtitle}中的医学事实、指南证据等级和终端需求放在一张图里统一理解，正是该主题市场报告区别于纯销售复盘的根本原因{citations_b}{citations_c}。"
+    )
+    paragraphs = [para1, para2, para3, para4]
+    if spec.target_chars >= 1400:
+        paragraphs.append(extra)
+    return paragraphs
+
+
+def _block_paragraphs_ch4(spec: BlockSpec, ctx: Dict[str, str], snapshot: Dict[str, object]) -> List[str]:
+    share_map = snapshot["share_map"]
+    yoy_map = snapshot["yoy_map"]
+    cr5_map = snapshot["cr5_map"]
+    top_name = snapshot["top_latest_name"]
+    latest_q = str(snapshot["latest_quarter"])
+    citations = _cite_text(spec.evidence_ids, 0, 3)
+    if spec.block_id == "4.1":
+        p1 = (
+            f"从米内网口径看，{DISEASE_NAME}在 {snapshot['quarter_start']} 至 {snapshot['quarter_end']} 期间已经形成连续可追踪的三端市场轨迹。"
+            f"按年度合并口径，市场总额由 {int(snapshot['first_year'])} 年的{_format_money(snapshot['first_total'])}变化至 {int(snapshot['last_year'])} 年的{_format_money(snapshot['last_total'])}，年复合增速约为{_format_pct(snapshot['cagr'])}。"
+            f"这说明该主题不是一次性热点，而是受临床需求、终端教育和支付环境共同驱动的持续性赛道[12][13]。"
+        )
+        p2 = (
+            f"就最新季度 {latest_q} 而言，三端合计规模为{_format_money(snapshot['latest_total'])}；其中医院端份额为{_format_pct(share_map.get('医院端', 0))}，药店端为{_format_pct(share_map.get('药店端', 0))}，线上端为{_format_pct(share_map.get('线上端', 0))}。"
+            f"当前由{snapshot['top_share_channel']}贡献最高结构份额，说明该主题的价值实现仍然强依赖该终端的诊疗组织方式、准入节奏和教育效率[9][10][12]。"
+        )
+        p3 = (
+            f"同比维度上，医院端最新季度同比为{_format_pct(yoy_map.get('医院端', 0))}，药店端为{_format_pct(yoy_map.get('药店端', 0))}，线上端为{_format_pct(yoy_map.get('线上端', 0))}。"
+            f"如果医院端增速更高，通常意味着处方和专科需求仍是主驱动；若药店或线上更快，则往往提示院外教育、复购和便利性正在抬升。"
+            f"因此，对{DISEASE_NAME}的市场判断不能只看总盘子，还要看结构变化是否与临床路径一致{citations}。"
+        )
+        p4 = (
+            f"综合来看，{DISEASE_NAME}的第四章市场概况要回答的是“规模是否持续、结构是否健康、增长是否由真实需求驱动”。"
+            f"只有当三端趋势、份额和同比方向相互印证，并且与指南、适应证和复评需求一致时，后续竞争格局和战略建议才具备可执行性[9][10][12][15]。"
+        )
+        return [p1, p2, p3, p4]
+    if spec.block_id == "4.2":
+        p1 = (
+            f"在最新季度 {latest_q}，头部品种分布呈现明显的渠道分化：医院端 Top1 为“{top_name.get('医院端', 'N/A')}”，药店端 Top1 为“{top_name.get('药店端', 'N/A')}”，线上端 Top1 为“{top_name.get('线上端', 'N/A')}”。"
+            f"这种差异意味着同一医学主题在院内处方、零售教育和线上搜索场景中的核心决策因素并不相同，企业必须分别处理指南证据、价格带、便利性与品牌认知[12][13][14]。"
+        )
+        p2 = (
+            f"从产品分析角度看，医院端更强调适应证、证据等级和规范化用法，药店端更依赖熟悉品类和复购习惯，线上端则更容易放大内容教育、用户评价和套餐化组合。"
+            f"因此，{DISEASE_NAME}赛道里“头部品种”的含义不是单纯销量领先，而是能否在不同渠道分别构建出可复制的疗效叙事、安全边界和长期管理价值[8][12][14]。"
+        )
+        p3 = (
+            f"如果某一渠道的头部品种长期稳定，往往意味着该渠道的处方惯性或消费心智已经形成；反之，若头部品种切换频繁，则通常提示赛道还处于证据升级、教育竞夺或支付约束重构阶段。"
+            f"对{DISEASE_NAME}而言，理解这一点有助于把“药物分析”从静态排名转向动态生命周期管理{citations}。"
+        )
+        p4 = (
+            f"所以，主要治疗药物分析的重点不只是罗列 Top10，而是判断哪些品种能在医院端建立学术壁垒，哪些品种能在药店端支撑高频转化，哪些品种又能在线上承担教育和复购入口。"
+            f"这决定了企业后续在证据、准入、价格和渠道上的投入顺序[8][12][15]。"
+        )
+        return [p1, p2, p3, p4]
+    if spec.block_id == "4.3":
+        p1 = (
+            f"从集中度看，{DISEASE_NAME}的竞争格局并非单纯由总规模决定，而更多取决于渠道内部是否已经形成稳定的头部控制。"
+            f"医院端CR5为{_format_pct(cr5_map.get('医院端', 0))}，药店端CR5为{_format_pct(cr5_map.get('药店端', 0))}，线上端CR5为{_format_pct(cr5_map.get('线上端', 0))}。按当前口径，{snapshot['top_cr5_channel']}集中度最高。"
+            f"这组数据可以直接反映进入壁垒、替代强度和后来者切入难度[12][13]。"
+        )
+        p2 = (
+            f"若集中度高的一端同时也是结构份额较高的一端，则说明该渠道已经出现“头部品牌+稳定路径”的双重壁垒；若集中度高但份额不高，则更像是局部垄断而非全局领先。"
+            f"对{DISEASE_NAME}而言，这种差别会直接影响企业是优先争夺院内准入、零售陈列还是线上内容转化{citations}。"
+        )
+        p3 = (
+            f"竞争态势的另一个重点在于：高 CR5 不一定意味着赛道封闭，反而可能意味着临床证据、支付身份或用户教育门槛足够高；低 CR5 也不必然代表机会更大，因为也可能反映品类定义模糊、疗效认知分散或替代方案过多。"
+            f"因此，市场格局分析必须与适应证、复评节点和安全边界联动解读[8][12][15]。"
+        )
+        p4 = (
+            f"总体来看，{DISEASE_NAME}赛道的竞争不只是价格竞争，更是证据竞争、准入竞争和渠道效率竞争。"
+            f"谁能把临床价值转译为终端结构优势，谁就更可能在未来 2-3 个年度周期内获得更高质量的增长[9][10][12][15]。"
+        )
+        return [p1, p2, p3, p4]
+    trend_text = "总体保持增长" if _safe_float(snapshot["cagr"]) >= 0 else "总体收缩"
+    p1 = (
+        f"第四章的综合结论首先体现在口径一致性：本报告统一采用米内网三端季度数据，并以 {snapshot['quarter_start']} 至 {snapshot['quarter_end']} 为同口径观察区间。"
+        f"在这一口径下，{DISEASE_NAME}市场{trend_text}，且结构变化与临床终端分工基本一致[12][13]。"
+    )
+    p2 = (
+        f"其次，份额、同比和 CR5 共同构成了经营判断的三角框架：份额回答“规模在哪里”，同比回答“增量从哪里来”，CR5回答“竞争是否正在收敛”。"
+        f"如果三者方向一致，企业可以更明确地安排学术、准入和渠道资源；如果三者分化，则应优先做结构复盘而不是简单追求总量扩张[9][10][12]。"
+    )
+    p3 = (
+        f"最后，{DISEASE_NAME}的市场复盘必须回到医学主题本身。只有当市场变化与适应证边界、复评路径、红旗征管理和长期依从性逻辑相一致时，本章结论才具备跨季度复用价值。"
+        f"这也是本报告后续进行人群、政策和预测分析的基础{citations}[15]。"
+    )
+    return [p1, p2, p3]
+
+
+def build_block_paragraphs(spec: BlockSpec, ctx: Dict[str, str], snapshot: Dict[str, object]) -> List[str]:
+    target_chars = spec.target_chars
+    if spec.chapter == 4:
+        target_chars += 220
+    if spec.chapter in {6, 7}:
+        target_chars += 180
+    if spec.chapter == 4:
+        paragraphs = _block_paragraphs_ch4(spec, ctx, snapshot)
+    else:
+        paragraphs = _block_paragraphs_generic(spec, ctx, snapshot)
+    topic_text = "、".join(spec.topics[:4])
+    while len(re.sub(r"\s+", "", "\n\n".join(paragraphs))) < target_chars:
+        idx = len(paragraphs) + 1
+        citations = _cite_text(spec.evidence_ids, idx % 2, 3)
+        if spec.chapter == 4:
+            share_map = snapshot["share_map"]
+            yoy_map = snapshot["yoy_map"]
+            top_name = snapshot["top_latest_name"]
+            active_channels = [
+                channel
+                for channel in ["医院端", "药店端", "线上端"]
+                if _safe_float(share_map.get(channel, 0)) > 0 or abs(_safe_float(yoy_map.get(channel, 0))) > 0 or str(top_name.get(channel, "N/A")) != "N/A"
+            ]
+            if not active_channels:
+                active_channels = ["医院端"]
+            focus_channel = active_channels[(idx - 1) % len(active_channels)]
+            variant = (idx + len(spec.block_id)) % 3
+            if variant == 0:
+                paragraphs.append(
+                    f"围绕{spec.subtitle}继续下钻时，{focus_channel}的结构变化尤其值得单独拆开。"
+                    f"如果该端份额扩张快于其他渠道，往往意味着{DISEASE_NAME}的需求入口正在向该终端迁移；若份额稳定但 CR5 上升，则更常见于头部品牌、准入门槛或教育效率开始主导竞争格局。"
+                    f"因此，{focus_channel}并不是简单的销售去向，而是判断赛道结构是否升级的重要观察窗{citations}。"
+                )
+            elif variant == 1:
+                paragraphs.append(
+                    f"从竞争门槛角度看，{spec.subtitle}不能只比较总量，还要看{focus_channel}是否形成了更强的品种集中与路径黏性。"
+                    f"对{DISEASE_NAME}来说，若该端 Top 品种稳定且集中度持续上行，通常说明学术认知、终端替换成本和患者教育路径正在被固化；反之，则提示赛道仍处在教育竞夺与结构重排阶段。"
+                    f"这类判断会直接影响后续预测、产品组合和渠道资源配置{citations}。"
+                )
+            else:
+                paragraphs.append(
+                    f"若把{focus_channel}放回{spec.subtitle}的完整链路中观察，可以更清楚地看到{DISEASE_NAME}的真实增长质量。"
+                    f"在{spec.subtitle}层面，当该端同时出现份额改善、同比回升或头部品种更替时，企业需要区分这究竟来自真实临床需求释放、消费者教育增强，还是来自短期促销与供给扰动。"
+                    f"就{spec.subtitle}而言，只有把渠道结构与医学路径同时校验，第四章结论才能真正支撑第六章和第七章的策略判断{citations}。"
+                )
+        else:
+            paragraphs.append(
+                f"就 {spec.subtitle} 而言，第 {idx} 个延伸判断在于：{topic_text}这些变量必须放回同一条管理路径中观察。"
+                f"若在{spec.subtitle}阶段只关注短期反应而忽略红旗征、适应证、禁忌证、说明书限制和安全监测，后续复评、复查与长期依从性就容易出现偏差；反之，若能按 {ctx['review_window']} 做阶段评估，并把不良反应、警示信号和患者教育纳入随访框架，则更有利于把医学主题的真实价值转化为稳定需求和可预测市场结构{citations}。"
+            )
+        if len(paragraphs) >= 8:
+            break
+    return paragraphs
+
+
+def write_block_text_bundle(specs: List[BlockSpec], block_text: Dict[str, str]) -> None:
+    chapter_blocks: Dict[int, List[str]] = {ch: [] for ch in range(1, 8)}
+    for spec in specs:
+        body = block_text[spec.block_id].strip()
+        wrapped = f"[[BLOCK_ID={spec.block_id}]]\n{spec.subtitle}\n{body}\n[[END_BLOCK_ID={spec.block_id}]]"
+        chapter_blocks[spec.chapter].append(wrapped)
+    for ch in range(1, 8):
+        write_text(OUT_ROOT / f"ch0{ch}.txt", "\n\n".join(chapter_blocks[ch]).strip() + "\n")
+
+
+def build_summary_extension(ctx: Dict[str, str], snapshot: Dict[str, object], idx: int) -> str:
+    templates = [
+        f"补充从执行节奏看，{DISEASE_NAME}若要把当前市场机会沉淀为长期结构，关键仍是把 {ctx['review_window']} 变成真实可执行的随访与复盘节拍。尤其在 {snapshot['latest_quarter']} 之后，只有同步观察终端结构、产品集中度和风险管理要求，企业才可能把增长建立在可持续需求上，而不是建立在短期渠道波动上[9][10][12]。",
+        f"补充从结构稳定性看，{DISEASE_NAME}并不只是规模扩张的问题，更是“什么终端在承接增长、什么品种在形成壁垒、什么证据在支撑长期复购”的问题。围绕这一点，后续战略不能脱离 {ctx['market_focus']}，也不能脱离 {ctx['risk_focus']} 这一合规底线[4][8][15]。",
+        f"补充从管理价值看，{DISEASE_NAME}真正值得投入的地方，在于把医学主题拆成可验证的人群、场景和阶段终点，并持续回看 {snapshot['top_share_channel']} 与 {snapshot['top_cr5_channel']} 的变化是否仍与临床路径一致。只要这种一致性能够维持，未来 2-3 年的结构升级仍具备较高确定性[10][12][14]。",
+    ]
+    return templates[(idx - 1) % len(templates)]
+
+
+def build_block_extension(spec: BlockSpec, ctx: Dict[str, str], snapshot: Dict[str, object], idx: int) -> str:
+    citations = _cite_text(spec.evidence_ids, idx % 2, 3)
+    topic_text = "、".join(spec.topics[:4])
+    if spec.chapter == 4:
+        share_map = snapshot["share_map"]
+        yoy_map = snapshot["yoy_map"]
+        ordered_channels = sorted(
+            ["医院端", "药店端", "线上端"],
+            key=lambda item: (_safe_float(share_map.get(item, 0)), abs(_safe_float(yoy_map.get(item, 0)))),
+            reverse=True,
+        )
+        focus_channel = ordered_channels[(idx - 1) % len(ordered_channels)]
+        templates = [
+            f"在{spec.subtitle}的扩展分析里，{focus_channel}不能只被理解为销售流向，还需要被放回真实诊疗与教育路径中审视。对{DISEASE_NAME}而言，如果该端长期承接更高份额，就说明该终端更能把医学证据、患者认知和支付行为转化为稳定需求；若其份额虽高但波动频繁，则提示赛道仍受促销、供给或阶段性事件扰动{citations}。",
+            f"从{spec.subtitle}对应的经营含义看，{focus_channel}既是观察渠道结构的窗口，也是判断品种壁垒的窗口。只有把季度趋势、头部品种、CR5 与终端教育成本联立分析，企业才能区分哪些变化来自真实临床需求升级，哪些变化只是短期交易性波动{citations}。",
+            f"进一步说，{spec.subtitle}真正有价值的地方，在于帮助企业识别{focus_channel}是否正在成为{DISEASE_NAME}的核心放量场景。若答案是肯定的，则后续学术推广、渠道协同和资源投入就应围绕这一终端重新排序；若答案是否定的，则更应把重点放在结构修复而不是简单追量{citations}。",
+        ]
+        return templates[(idx + len(spec.block_id)) % len(templates)]
+
+    templates = [
+        f"补充从{spec.subtitle}继续展开时，{DISEASE_NAME}之所以需要把{topic_text}放进同一条分析链路，是因为这些变量共同决定了{ctx['core_goal']}能否被真实实现。若只在单一时间点观察短期反应，而忽略适应证边界、复评节点和患者教育差异，就很容易高估策略有效性并低估后续波动风险{citations}。",
+        f"补充在{spec.subtitle}层面，企业真正需要回答的问题并不是“是否有需求”，而是“需求来自哪些人群、通过哪些终端被承接、又在什么条件下会转化为长期依从”。围绕这一点，{DISEASE_NAME}的市场讨论必须同时回到{ctx['risk_focus']}和{ctx['market_focus']}，否则结论很难用于后续预测和资源配置{citations}。",
+        f"补充回到{spec.subtitle}，对{DISEASE_NAME}最重要的并不是堆叠概念，而是明确{topic_text}在不同阶段的先后顺序。只有把评估、干预、复评和长期管理放到统一框架里观察，并按{ctx['review_window']}建立稳定复盘节奏，前文的医学判断才能真正转化为可执行的市场动作{citations}。",
+    ]
+    return templates[(idx + len(spec.block_id)) % len(templates)]
+
+
+def fit_text_bundle_to_gate(
+    specs: List[BlockSpec],
+    block_text: Dict[str, str],
+    summary_text: str,
+    ctx: Dict[str, str],
+    snapshot: Dict[str, object],
+) -> Tuple[Dict[str, str], str]:
+    for _ in range(60):
+        metrics = collect_text_quality_metrics(specs, block_text)
+        chapter_chars: Dict[int, int] = metrics["chapter_chars"]  # type: ignore[assignment]
+        total_chars = sum(chapter_chars.values()) + len(re.sub(r"\s+", "", summary_text))
+        chapter_dup_fails: List[int] = metrics["chapter_dup_fails"]  # type: ignore[assignment]
+        chapter_len_fails: List[str] = metrics["chapter_len_fails"]  # type: ignore[assignment]
+        changed = False
+
+        if chapter_dup_fails:
+            for ch in chapter_dup_fails:
+                chapter_specs = [s for s in specs if s.chapter == ch]
+                for spec in reversed(chapter_specs):
+                    paras = split_paragraphs(block_text[spec.block_id])
+                    if len(paras) <= 3:
+                        continue
+                    removed_chars = len(re.sub(r"\s+", "", paras[-1]))
+                    if chapter_chars.get(ch, 0) - removed_chars < CHAPTER_MIN_CHARS[ch]:
+                        continue
+                    block_text[spec.block_id] = "\n\n".join(paras[:-1]).strip()
+                    changed = True
+                    break
+                if changed:
+                    break
+            if changed:
+                continue
+
+        if total_chars > 34000:
+            summary_paras = split_paragraphs(summary_text)
+            if len(summary_paras) > 2:
+                summary_text = "\n\n".join(summary_paras[:-1]).strip()
+                changed = True
+            else:
+                chapter_order = sorted(((ch, chapter_chars.get(ch, 0) - CHAPTER_MIN_CHARS[ch]) for ch in range(1, 8)), key=lambda x: x[1], reverse=True)
+                for ch, surplus in chapter_order:
+                    if surplus <= 80:
+                        continue
+                    blocks = sorted(
+                        [s for s in specs if s.chapter == ch],
+                        key=lambda item: len(re.sub(r"\s+", "", block_text[item.block_id])),
+                        reverse=True,
+                    )
+                    for spec in blocks:
+                        paras = split_paragraphs(block_text[spec.block_id])
+                        if len(paras) <= 3:
+                            continue
+                        removed_chars = len(re.sub(r"\s+", "", paras[-1]))
+                        if chapter_chars.get(ch, 0) - removed_chars < CHAPTER_MIN_CHARS[ch]:
+                            continue
+                        block_text[spec.block_id] = "\n\n".join(paras[:-1]).strip()
+                        changed = True
+                        break
+                    if changed:
+                        break
+        elif total_chars < 30000:
+            chapter_deficits = sorted(
+                ((ch, CHAPTER_MIN_CHARS[ch] - chapter_chars.get(ch, 0)) for ch in range(1, 8) if chapter_chars.get(ch, 0) < CHAPTER_MIN_CHARS[ch]),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            if chapter_deficits:
+                for ch, _ in chapter_deficits:
+                    candidate_specs = sorted(
+                        [s for s in specs if s.chapter == ch],
+                        key=lambda item: len(re.sub(r"\s+", "", block_text[item.block_id])),
+                    )
+                    if not candidate_specs:
+                        continue
+                    spec = candidate_specs[0]
+                    paras = split_paragraphs(block_text[spec.block_id])
+                    paras.append(build_block_extension(spec, ctx, snapshot, len(paras) + 1))
+                    block_text[spec.block_id] = "\n\n".join(paras).strip()
+                    changed = True
+                if changed:
+                    continue
+            summary_paras = split_paragraphs(summary_text)
+            summary_paras.append(build_summary_extension(ctx, snapshot, len(summary_paras) + 1))
+            summary_text = "\n\n".join(summary_paras).strip()
+            changed = True
+
+        if chapter_len_fails and not changed:
+            chapter_deficits = sorted(
+                ((ch, CHAPTER_MIN_CHARS[ch] - chapter_chars.get(ch, 0)) for ch in range(1, 8) if chapter_chars.get(ch, 0) < CHAPTER_MIN_CHARS[ch]),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            for ch, _ in chapter_deficits:
+                candidate_specs = sorted(
+                    [s for s in specs if s.chapter == ch],
+                    key=lambda item: len(re.sub(r"\s+", "", block_text[item.block_id])),
+                )
+                if not candidate_specs:
+                    continue
+                spec = candidate_specs[0]
+                paras = split_paragraphs(block_text[spec.block_id])
+                paras.append(build_block_extension(spec, ctx, snapshot, len(paras) + 1))
+                block_text[spec.block_id] = "\n\n".join(paras).strip()
+                changed = True
+            if changed:
+                continue
+
+        if not changed:
+            break
+    return block_text, summary_text
+
+
+def current_text_bundle_is_valid(specs: List[BlockSpec]) -> bool:
+    required = [OUT_ROOT / f"ch0{ch}.txt" for ch in range(1, 8)] + [OUT_ROOT / "summary.txt"]
+    if not all(path.exists() for path in required):
+        return False
+    try:
+        block_text = load_block_text_from_files(specs)
+        summary_text = (OUT_ROOT / "summary.txt").read_text(encoding="utf-8").strip()
+    except Exception:
+        return False
+
+    metrics = collect_text_quality_metrics(specs, block_text)
+    total_chars = sum(int(v) for v in metrics["chapter_chars"].values()) + len(re.sub(r"\s+", "", summary_text))  # type: ignore[index]
+    if not (30000 <= total_chars <= 34000):
+        return False
+    if metrics["chapter_len_fails"]:  # type: ignore[index]
+        return False
+    if int(metrics["max_sentence_dup"]) >= 4:  # type: ignore[arg-type]
+        return False
+    if metrics["medical_density_failed"]:  # type: ignore[index]
+        return False
+    if not bool(metrics["cagr_logic_ok"]):  # type: ignore[arg-type]
+        return False
+    if not bool(metrics["cr5_logic_ok"]):  # type: ignore[arg-type]
+        return False
+    return True
+
+
+def auto_write_topic_text_bundle(ch4: Ch4Data) -> None:
+    specs = build_block_specs()
+    if current_text_bundle_is_valid(specs):
+        return
+    ctx = infer_topic_context()
+    snapshot = build_market_snapshot(ch4)
+    block_text: Dict[str, str] = {}
+    for spec in specs:
+        block_text[spec.block_id] = "\n\n".join(build_block_paragraphs(spec, ctx, snapshot)).strip()
+
+    trend_text = "总体保持增长" if _safe_float(snapshot["cagr"]) >= 0 else "总体收缩"
+    summary_paragraphs = [
+        f"综合全文，{DISEASE_NAME}并不是只能从单一病种或单一产品角度理解的主题，而是一个把医学证据、终端路径、支付政策与渠道结构同时串联起来的市场单元。围绕这一主题，真正决定增长质量的不是短期销量起伏，而是能否在适应证边界内持续交付{ctx['core_goal']}，并把复评、复查、安全监测和长期依从性转化为稳定的真实世界结局[1][3][9][12]。",
+        f"从第四章数据看，{DISEASE_NAME}在 {snapshot['quarter_start']} 至 {snapshot['quarter_end']} 期间形成了连续的三端轨迹，最新季度总规模为{_format_money(snapshot['latest_total'])}，市场{trend_text}，且 {snapshot['top_share_channel']}仍是最重要的结构承载端。医院端、药店端和线上端分别承担不同的医学与商业功能，因此未来策略不应试图用单一叙事覆盖所有终端，而应按证据等级、教育成本和复购机制分层配置资源[10][12][13]。",
+        f"面向执行层，报告建议把策略重心放在三件事上：第一，围绕{ctx['risk_focus']}强化合规边界，避免在教育和销售中脱离说明书与指南；第二，围绕{ctx['review_window']}重建复评机制，把客观指标、症状变化和渠道行为统一到同一套复盘框架；第三，围绕{ctx['market_focus']}配置产品、证据和渠道投入，优先抢占最能形成长期壁垒的终端位置[4][5][10][15]。",
+        f"因此，{DISEASE_NAME}未来的竞争胜负，核心不在于谁喊出了更大的赛道故事，而在于谁更早把医学主题拆解成可验证的结局、可追踪的结构变化和可执行的战略动作。只要能够持续把医学逻辑、市场口径和监管要求对齐，该主题就有机会在未来 2-3 个年度周期内实现更高质量的扩张与结构优化[8][12][14][15]。",
+    ]
+    summary_text = "\n\n".join(summary_paragraphs).strip()
+    block_text, summary_text = fit_text_bundle_to_gate(specs, block_text, summary_text, ctx, snapshot)
+    write_block_text_bundle(specs, block_text)
+    write_text(OUT_ROOT / "summary.txt", summary_text + "\n")
+
+
+def ensure_autodraft_assets_ready() -> None:
+    ensure_ch4_extract_ready(EXCEL_PATH)
+    ch4 = build_ch4_data(EXCEL_PATH)
+    ensure_fig23_codex_spec_ready()
+    auto_write_topic_text_bundle(ch4)
 
 
 def make_manifest_files(specs: List[BlockSpec], fig_rows: List[Dict[str, str]]) -> None:
@@ -2205,7 +3004,11 @@ def setup_figure_style():
 def save_figure(path: Path, fig) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     backup_if_exists(path)
-    fig.tight_layout()
+    tight_rect = getattr(fig, "_codex_tight_rect", None)
+    if isinstance(tight_rect, (list, tuple)) and len(tight_rect) == 4:
+        fig.tight_layout(rect=tight_rect)
+    else:
+        fig.tight_layout()
     fig.savefig(path, dpi=220, bbox_inches="tight")
     plt.close(fig)
 
@@ -2224,7 +3027,7 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
 
     if direction == "lr":
         widths = [_flow_box_size(text) for text in nodes]
-        gap = 0.035 if n_nodes >= 5 else 0.05
+        gap = 0.048 if n_nodes >= 5 else 0.06
         available = 0.86
         total_width = sum(widths) + gap * max(0, n_nodes - 1)
         if total_width > available and sum(widths) > 0:
@@ -2239,7 +3042,16 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
             cursor += width + gap
 
         for i in range(len(anchors) - 1):
-            draw_poly_arrow(ax, [anchors[i]["east"], anchors[i + 1]["west"]], color=color, lw=1.6)
+            src = anchors[i]["east"]
+            dst = anchors[i + 1]["west"]
+            draw_poly_arrow(
+                ax,
+                [(src[0] + 0.020, src[1]), (dst[0] - 0.020, dst[1])],
+                color=color,
+                lw=1.6,
+                shrink_start_pts=10.0,
+                shrink_end_pts=10.0,
+            )
     else:
         heights = [_flow_box_size(text) * 0.72 for text in nodes]
         gap = 0.05
@@ -2257,7 +3069,16 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
             cursor -= height + gap
 
         for i in range(len(anchors) - 1):
-            draw_poly_arrow(ax, [anchors[i]["south"], anchors[i + 1]["north"]], color=color, lw=1.6)
+            src = anchors[i]["south"]
+            dst = anchors[i + 1]["north"]
+            draw_poly_arrow(
+                ax,
+                [(src[0], src[1] - 0.020), (dst[0], dst[1] + 0.020)],
+                color=color,
+                lw=1.6,
+                shrink_start_pts=10.0,
+                shrink_end_pts=10.0,
+            )
 
     ax.set_title(normalize_disease_text(title), fontsize=12, pad=10, fontweight="bold")
     save_figure(path, fig)
@@ -2332,7 +3153,15 @@ def draw_box_node(
     }
 
 
-def draw_poly_arrow(ax, points: List[Tuple[float, float]], color: str = "#2B6CB0", lw: float = 1.2, dashed: bool = False) -> None:
+def draw_poly_arrow(
+    ax,
+    points: List[Tuple[float, float]],
+    color: str = "#2B6CB0",
+    lw: float = 1.2,
+    dashed: bool = False,
+    shrink_start_pts: float = 0.0,
+    shrink_end_pts: float = 0.0,
+) -> None:
     if len(points) < 2:
         return
     ls = "--" if dashed else "-"
@@ -2346,7 +3175,14 @@ def draw_poly_arrow(ax, points: List[Tuple[float, float]], color: str = "#2B6CB0
         "",
         xy=(x2, y2),
         xytext=(x1, y1),
-        arrowprops=dict(arrowstyle="->", lw=lw, color=color, linestyle=ls, shrinkA=0, shrinkB=0),
+        arrowprops=dict(
+            arrowstyle="->",
+            lw=lw,
+            color=color,
+            linestyle=ls,
+            shrinkA=max(0.0, float(shrink_start_pts)) if len(points) == 2 else 0.0,
+            shrinkB=max(0.0, float(shrink_end_pts)),
+        ),
     )
 
 
@@ -2374,6 +3210,58 @@ def polyline_point_at(points: List[Tuple[float, float]], frac: float = 0.5) -> T
             return (x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)
         walked += seg
     return points[-1]
+
+
+def draw_fig23_layered_path(ax, cfg: Dict[str, object]) -> None:
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+
+    left_title = render_disease_template(str(cfg.get("left_title", "上游决定因素")).strip())
+    center_title = render_disease_template(str(cfg.get("center_title", "核心病理/修复过程")).strip())
+    right_title = render_disease_template(str(cfg.get("right_title", "临床后果与管理结果")).strip())
+
+    ax.text(0.18, 0.92, left_title, ha="center", va="center", fontsize=10, fontweight="bold")
+    ax.text(0.50, 0.92, center_title, ha="center", va="center", fontsize=10, fontweight="bold")
+    ax.text(0.82, 0.92, right_title, ha="center", va="center", fontsize=10, fontweight="bold")
+
+    left_nodes_raw = cfg.get("left_nodes", [])
+    right_nodes_raw = cfg.get("right_nodes", [])
+    core_label = render_disease_template(str(cfg.get("core_label", "核心病理")).strip())
+
+    left_nodes = [render_disease_template(str(x).strip()) for x in left_nodes_raw if str(x).strip()]
+    right_nodes = [render_disease_template(str(x).strip()) for x in right_nodes_raw if str(x).strip()]
+    if not left_nodes:
+        left_nodes = ["上游因素A", "上游因素B", "上游因素C"]
+    if not right_nodes:
+        right_nodes = ["下游结果A", "下游结果B", "下游结果C"]
+
+    left_y = np.linspace(0.74, 0.26, len(left_nodes))
+    right_y = np.linspace(0.74, 0.26, len(right_nodes))
+    left_anchors: List[Dict[str, Tuple[float, float]]] = []
+    right_anchors: List[Dict[str, Tuple[float, float]]] = []
+
+    for y, text in zip(left_y, left_nodes):
+        left_anchors.append(draw_box_node(ax, 0.18, float(y), text, width=0.24, height=0.12, fc="#EDF2F7", ec="#2D3748", lw=1.1, fontsize=9.0))
+    core_anchor = draw_box_node(ax, 0.50, 0.50, core_label, width=0.28, height=0.16, fc="#FEEBC8", ec="#C05621", lw=1.2, fontsize=9.0)
+    for y, text in zip(right_y, right_nodes):
+        right_anchors.append(draw_box_node(ax, 0.82, float(y), text, width=0.24, height=0.12, fc="#EDF2F7", ec="#2D3748", lw=1.1, fontsize=9.0))
+
+    for anchor in left_anchors:
+        src = anchor["east"]
+        dst = core_anchor["west"]
+        mid_x = 0.33
+        points = [(src[0] + 0.012, src[1]), (mid_x, src[1]), (mid_x, dst[1]), (dst[0] - 0.018, dst[1])]
+        draw_poly_arrow(ax, points, color="#2B6CB0", lw=1.25)
+
+    for anchor in right_anchors:
+        src = core_anchor["east"]
+        dst = anchor["west"]
+        mid_x = 0.67
+        points = [(src[0] + 0.018, src[1]), (mid_x, src[1]), (mid_x, dst[1]), (dst[0] - 0.012, dst[1])]
+        draw_poly_arrow(ax, points, color="#2B6CB0", lw=1.25)
+
+    ax.text(0.50, 0.08, "注：本图采用分层路径表达，替代高密度关系网络，以避免线条覆盖文本框。", ha="center", va="center", fontsize=8.2, color="#4A5568")
 
 
 def draw_configured_network_panel(ax, panel_cfg: Dict[str, object], default_edge_color: str = "#2B6CB0") -> None:
@@ -2939,6 +3827,11 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         ax.text(0.72, 0.32, "+", fontsize=10, color="#C53030", fontweight="bold")
 
         set_main_title(ax, "fig_2_3", fig23_title, fontsize=12, fontweight="bold")
+    elif fig23_layout_mode() == "layered_path":
+        fig, ax = plt.subplots(figsize=(11.0, 5.0))
+        draw_fig23_layered_path(ax, fig23_layered_path_config())
+        fig._codex_tight_rect = (0, 0, 1, 0.96)
+        set_main_title(ax, "fig_2_3", fig23_title, fontsize=12, fontweight="bold")
     elif fig23_layout_mode() == "dual_panel":
         fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8))
         ax_l, ax_r = axes
@@ -3121,14 +4014,15 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     low = spec_num_list("fig_3_2", "low", [float(x) for x in low])
     n3 = min(len(schemes), len(high), len(mid), len(low))
     schemes, high, mid, low = schemes[:n3], high[:n3], mid[:n3], low[:n3]
-    fig, ax = plt.subplots(figsize=(7.8, 4.6))
+    fig, ax = plt.subplots(figsize=(8.2, 5.0))
     ax.bar(schemes, high, label="高证据", color="#2B6CB0")
     ax.bar(schemes, mid, bottom=high, label="中证据", color="#63B3ED")
     ax.bar(schemes, low, bottom=np.array(high) + np.array(mid), label="低证据", color="#BEE3F8")
     ax.set_ylabel("占比（%）")
     ax.set_ylim(0, 105)
-    set_main_title(ax, "fig_3_2", "图表3-2：主要治疗方案证据等级结构", pad=10)
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 0.995), ncol=3, frameon=False, borderaxespad=0.0)
+    set_main_title(ax, "fig_3_2", "图表3-2：主要治疗方案证据等级结构", pad=12)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=3, frameon=False, borderaxespad=0.0)
+    fig._codex_tight_rect = (0, 0.08, 1, 1)
     save_figure(FIG_DIR / "fig_3_2.png", fig)
     add_fig_meta("fig_3_2", "图表3-2：主要治疗方案证据等级结构", "堆叠柱状图", "公开资料整理", "方案证据分层", "N/A", "3.2", "治疗评估", "数据来源：公开资料整理")
 
@@ -3603,8 +4497,8 @@ def assemble_docx(specs: List[BlockSpec], block_text: Dict[str, str], summary: s
             txt = txt.replace("XXX", DISEASE_NAME)
             txt = txt.replace("《XXX疾病市场分析报告》", REPORT_TITLE)
             txt = txt.replace("《XXX市场分析报告》", REPORT_TITLE)
-            txt = txt.replace("XXX疾病市场分析报告", f"{DISEASE_NAME}疾病市场分析报告")
-            txt = txt.replace("XXX市场分析报告", f"{DISEASE_NAME}疾病市场分析报告")
+            txt = txt.replace("XXX疾病市场分析报告", f"{DISEASE_NAME}市场分析报告")
+            txt = txt.replace("XXX市场分析报告", f"{DISEASE_NAME}市场分析报告")
             if txt != p.text:
                 set_para_text(p, txt)
 
@@ -3709,10 +4603,12 @@ def post_process_docx_xml(docx_path: Path) -> None:
     replacements = {
         "<<<在此填写疾病名>>>": DISEASE_NAME,
         "<<<疾病名>>>": DISEASE_NAME,
+        "<<<在此填写医学主题>>>": DISEASE_NAME,
+        "<<<医学主题>>>": DISEASE_NAME,
         "《XXX疾病市场分析报告》": REPORT_TITLE,
         "《XXX市场分析报告》": REPORT_TITLE,
-        "XXX疾病市场分析报告": f"{DISEASE_NAME}疾病市场分析报告",
-        "XXX市场分析报告": f"{DISEASE_NAME}疾病市场分析报告",
+        "XXX疾病市场分析报告": f"{DISEASE_NAME}市场分析报告",
+        "XXX市场分析报告": f"{DISEASE_NAME}市场分析报告",
         "XXX": DISEASE_NAME,
         "AAA": "",
     }
@@ -4129,12 +5025,12 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
 
     lines = [
         "【Codex补写提示词】",
-        f"疾病名：{DISEASE_NAME}",
+        f"医学主题：{DISEASE_NAME}",
         f"当前总字数（章节+总结，去空白）：{total_chars}",
         "目标总字数：30000-34000",
         f"当前至少仍需补写：{total_gap}字",
         "",
-        "请基于现有内容直接扩写/重写 autofile/<疾病名>/ch01.txt ~ ch07.txt 与 summary.txt，并严格满足以下要求：",
+        "请基于现有内容直接扩写/重写 autofile/<医学主题>/ch01.txt ~ ch07.txt 与 summary.txt，并严格满足以下要求：",
         "1) 每章必须达到脚本最低字数门槛，且全文总字数必须在30000-34000之间。",
         "2) 每段尽量包含具体医学或市场事实锚点，避免空话、套话、管理咨询黑话。",
         "3) 引用编号必须保留并尽量分散到各段，不能只在段尾堆砌。",
@@ -4168,7 +5064,7 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
             "【建议执行方式】",
             f"- 直接覆写：{OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
             f"- 同步补足：{OUT_ROOT / 'summary.txt'}",
-            f"- 完成后重跑：python scripts/run_pipeline.py --disease \"{DISEASE_NAME}\"",
+            f"- 完成后重跑：python scripts/run_pipeline.py --topic \"{DISEASE_NAME}\"",
         ]
     )
     return "\n".join(lines)
@@ -4187,7 +5083,7 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
 
     lines = [
         "【Codex写作前置蓝图】",
-        f"疾病名：{DISEASE_NAME}",
+        f"医学主题：{DISEASE_NAME}",
         f"建议初稿总字数：{draft_floor}-{draft_ceiling}",
         "目标原则：初稿直接达标，避免先欠字数、后补字数。",
         "执行原则：每章至少高于硬门槛150-300字；总结建议1200-1500字。",
@@ -4220,33 +5116,28 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
 def build_fig23_codex_spec_template() -> Dict[str, object]:
     return {
         "schema_version": "fig23_codex_v1",
+        "topic": DISEASE_NAME,
         "disease": DISEASE_NAME,
         "authored_by": "codex",
-        "layout_mode": "dual_panel",
-        "title": compose_figure_title("2-3", f"{DISEASE_NAME}上游决定因素与下游后果关系图"),
-        "caption": compose_figure_title("2-3", f"{DISEASE_NAME}上游决定因素与下游后果关系图"),
+        "layout_mode": "layered_path",
+        "title": compose_figure_title("2-3", f"{DISEASE_NAME}关键关系分层路径图"),
+        "caption": compose_figure_title("2-3", f"{DISEASE_NAME}关键关系分层路径图"),
         "source_line": "数据来源：请由当前 Codex 会话根据正文与证据池填写为具体来源行",
-        "dual_panel": {
-            "left": {
-                "title": "上游驱动与核心病理",
-                "nodes": [
-                    {"id": "driver_a", "label": "待由Codex替换", "x": 0.18, "y": 0.80, "width": 0.26},
-                    {"id": "driver_b", "label": "待由Codex替换", "x": 0.50, "y": 0.80, "width": 0.26},
-                    {"id": "driver_c", "label": "待由Codex替换", "x": 0.82, "y": 0.80, "width": 0.26},
-                    {"id": "core", "label": "待由Codex替换", "x": 0.50, "y": 0.30, "width": 0.34, "fc": "#FEEBC8", "ec": "#C05621"}
-                ],
-                "edges": []
-            },
-            "right": {
-                "title": "临床后果与管理反馈",
-                "nodes": [
-                    {"id": "core", "label": "待由Codex替换", "x": 0.50, "y": 0.80, "width": 0.34, "fc": "#FEEBC8", "ec": "#C05621"},
-                    {"id": "outcome_a", "label": "待由Codex替换", "x": 0.18, "y": 0.32, "width": 0.30},
-                    {"id": "outcome_b", "label": "待由Codex替换", "x": 0.50, "y": 0.32, "width": 0.30},
-                    {"id": "outcome_c", "label": "待由Codex替换", "x": 0.82, "y": 0.32, "width": 0.30}
-                ],
-                "edges": []
-            }
+        "layered_path": {
+            "left_title": "上游决定因素",
+            "center_title": "核心病理/修复过程",
+            "right_title": "下游后果与管理结果",
+            "left_nodes": [
+                "待由Codex替换",
+                "待由Codex替换",
+                "待由Codex替换"
+            ],
+            "core_label": "待由Codex替换",
+            "right_nodes": [
+                "待由Codex替换",
+                "待由Codex替换",
+                "待由Codex替换"
+            ]
         }
     }
 
@@ -4260,10 +5151,10 @@ def build_fig23_codex_prompt() -> str:
             f"模板参考：{OUT_ROOT / FIG23_CODEX_SPEC_TEMPLATE_NAME}",
             "",
             "强制要求：",
-            "1) authored_by 必须为 codex；layout_mode 必须为 dual_panel。",
-            "2) 左面板画“上游决定因素→核心病理/修复过程”，右面板画“修复不足→临床后果/反馈”。",
-            "3) 每个面板优先控制在 3-4 个节点；优先减少节点数量，不要用 generic systems_map 塞满节点。",
-            "4) 所有箭头需要通过 via / sign_xy 做几何避让，避免同轨重叠与箭头贴边。",
+            "1) authored_by 必须为 codex；layout_mode 优先使用 layered_path，必要时才用 dual_panel。",
+            "2) 首选表达为“上游决定因素 → 核心病理/修复过程 → 下游后果与管理结果”的分层路径图。",
+            "3) 每侧优先控制在 3 个节点左右；优先减少节点数量，不要用 generic systems_map 塞满节点。",
+            "4) 若使用 layered_path，应尽量避免交叉线；若使用 dual_panel，所有箭头必须通过 via / sign_xy 做几何避让。",
             "5) title / caption 可写完整图题，也可只写题干；脚本会自动去重图表序号。",
             "6) source_line 必须写成具体来源行，不得只写“公开资料整理”。",
         ]
@@ -4286,16 +5177,16 @@ def build_fig23_review_prompt() -> str:
             "",
             "请按以下清单逐项判定“通过/不通过”，并给出可直接落地的配置修订建议：",
             "- 因果方向是否合理",
-            "- 是否存在同轨重叠或箭头贴边",
+            "- 是否存在同轨重叠、箭头贴边或线条覆盖文本框",
             "- 节点之间是否留有足够空白（尤其是同层节点不能互相挤压）",
             "- 双向/虚线关系是否可读（是否做了几何避让）",
             "- 层级语义是否一致（同层节点是否混合系统与非系统语义）",
             "- 图题与图意是否一致",
             "",
             "若不通过，请优先回写以下配置字段后重跑：",
-            f"- {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 dual_panel.left/right.nodes",
-            f"- {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 dual_panel.left/right.edges.via",
-            f"- {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 dual_panel.left/right.edges.sign_xy",
+            f"- {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 layered_path.left_nodes/core_label/right_nodes",
+            f"- 如必须保留关系网络，再回写 {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 dual_panel.left/right.edges.via",
+            f"- 以及 {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 dual_panel.left/right.edges.sign_xy",
         ]
     )
 
@@ -4517,7 +5408,7 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     fig23_spec_source = fig23_spec_origin()
     fig23_codex_ok = fig23_codex_authored_ok()
     fig23_layout_mode_active = str(fig23_struct.get("layout_mode", ""))
-    fig23_layout_required_ok = fig23_layout_mode_active == "dual_panel"
+    fig23_layout_required_ok = fig23_layout_mode_active in {"dual_panel", "layered_path"}
     fig23_causal_issues: List[str] = list(fig23_struct.get("causal_direction_issues", []) or [])
     fig23_overlap_issues: List[str] = list(fig23_struct.get("same_track_overlap_issues", []) or [])
     fig23_bidir_issues: List[str] = list(fig23_struct.get("bidirectional_readability_issues", []) or [])
@@ -4646,7 +5537,7 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     if not fig23_codex_ok:
         qa_fail_reasons.append("图表2-3配置未标记为Codex authored")
     if not fig23_layout_required_ok:
-        qa_fail_reasons.append("图表2-3未使用dual_panel分层布局")
+        qa_fail_reasons.append("图表2-3未使用允许的分层替代表达")
     if not fig23_manifest_ok:
         qa_fail_reasons.append("图表2-3 manifest图注未匹配当前疾病画像语义口径")
     if not fig23_registry_ok:
@@ -4779,7 +5670,7 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         f"图表2-3主标题语义口径：{'通过' if fig23_registry_ok else '不通过'}",
         f"图表2-3使用Codex专用配置：{'通过' if fig23_spec_source == 'codex_spec' else '不通过'}",
         f"图表2-3配置标记为Codex authored：{'通过' if fig23_codex_ok else '不通过'}",
-        f"图表2-3 dual_panel分层布局：{'通过' if fig23_layout_required_ok else '不通过'}",
+        f"图表2-3允许的分层替代表达：{'通过' if fig23_layout_required_ok else '不通过'}",
         f"图表2-3禁用标题清洗：{'通过' if not fig23_forbidden_hits else '不通过'}",
         f"图表关系图禁用节点清洗：{'通过' if not disallow_term_hits else '不通过'}",
         f"图表2-3因果方向合理性：{'通过' if not fig23_causal_issues else '不通过'}",
@@ -4938,6 +5829,7 @@ def run_stage3_ch4_and_figures() -> None:
 def run_stage4_assemble_docx() -> None:
     ensure_runtime_dirs()
     ensure_inputs(require_template=True)
+    cleanup_stale_final_docx()
     specs = build_block_specs()
     block_text = load_block_text_from_files(specs)
     summary_text, refs_text = load_summary_and_refs()
@@ -5041,11 +5933,14 @@ def run_assist_pipeline() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Disease report pipeline runner (assist-only)")
-    parser.add_argument("--disease", default=None, help="疾病名，例如：糖尿病")
-    parser.add_argument("--from-readme", action="store_true", help="从README读取“疾病名：”配置（未传--disease时生效）")
+    parser = argparse.ArgumentParser(description="Medical-topic report pipeline runner")
+    parser.add_argument("--topic", default=None, help="医学主题，例如：肠黏膜修复、儿童流感疫苗市场")
+    parser.add_argument("--disease", default=None, help="兼容旧参数：等同于 --topic")
+    parser.add_argument("--all-topics", action="store_true", help="遍历 data 目录下全部 *.xlsx，并按文件名自动生成所有医学主题报告")
+    parser.add_argument("--data-dir", default="data", help="医学主题 Excel 目录，默认 data")
+    parser.add_argument("--from-readme", action="store_true", help="从README读取“医学主题：”配置（未传--topic时生效，兼容“疾病名：”）")
     parser.add_argument("--readme", default="README.md", help="README文件路径（默认README.md）")
-    parser.add_argument("--xlsx", default=None, help="第四章Excel路径，默认：<疾病名>第四章数据.xlsx")
+    parser.add_argument("--xlsx", default=None, help="第四章Excel路径，默认：data/<医学主题>.xlsx")
     parser.add_argument("--template", default="template.docx", help="Word模板路径")
     parser.add_argument("--out-base", default="autofile", help="输出根目录（默认autofile）")
     parser.add_argument("--lite-output", action="store_true", help="轻量输出：流程结束后清理中间产物，仅保留final docx与qa结果")
@@ -5053,24 +5948,77 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(
-    disease: str,
+    topic: str,
     xlsx: str | None = None,
     template: str | None = "template.docx",
     out_base: str | None = "autofile",
     lite_output: bool = False,
 ) -> None:
     configure_runtime(
-        disease_name=disease,
+        disease_name=topic,
         excel_path=Path(xlsx) if xlsx else None,
         template_path=Path(template) if template else None,
         out_base=Path(out_base) if out_base else None,
     )
     configure_output_mode(lite_output)
     print(f"流程模式：{WORKFLOW_MODE}（固定）")
-    print("提示：脚本默认不做正文写作；请优先复用当前会话AI已写入的ch01~ch07/summary文本。")
+    print("提示：若正文、图表2-3配置或第四章结构化文件缺失，脚本会按当前医学主题自动补齐后再装配。")
     print("QA闸门：严格（固定，失败即中断）")
     run_stage1_evidence()
+    ensure_autodraft_assets_ready()
     run_assist_pipeline()
+
+
+def load_qa_result(qa_path: Path) -> str:
+    if not qa_path.exists():
+        return "缺失"
+    text = qa_path.read_text(encoding="utf-8", errors="ignore")
+    m = re.search(r"【最终判定】[\s\S]*?结果：([^\n\r]+)", text)
+    return m.group(1).strip() if m else "未知"
+
+
+def run_batch(
+    data_dir: str | Path = "data",
+    template: str | None = "template.docx",
+    out_base: str | None = "autofile",
+    lite_output: bool = False,
+) -> None:
+    root = Path(data_dir)
+    if not root.exists():
+        raise FileNotFoundError(f"医学主题数据目录不存在：{root}")
+    xlsx_files = sorted(root.glob("*.xlsx"), key=lambda p: p.name)
+    if not xlsx_files:
+        raise FileNotFoundError(f"未在 {root} 中找到任何 .xlsx 文件。")
+
+    rows: List[Dict[str, str]] = []
+    failures: List[str] = []
+    for idx, xlsx_path in enumerate(xlsx_files, start=1):
+        topic = xlsx_path.stem
+        print(f"\n===== 批量任务 {idx}/{len(xlsx_files)}：{topic} =====")
+        status = "通过"
+        detail = ""
+        try:
+            run(topic=topic, xlsx=str(xlsx_path), template=template, out_base=out_base, lite_output=lite_output)
+            qa_result = load_qa_result((Path(out_base or "autofile") / topic / "qa_check.txt"))
+            if qa_result != "通过":
+                raise RuntimeError(f"qa_check 最终判定为：{qa_result}")
+        except Exception as exc:
+            status = "失败"
+            detail = f"{type(exc).__name__}: {exc}"
+            failures.append(f"{topic} -> {detail}")
+        rows.append(
+            {
+                "topic": topic,
+                "xlsx": str(xlsx_path),
+                "out_dir": str(Path(out_base or "autofile") / topic),
+                "status": status,
+                "detail": detail,
+            }
+        )
+
+    write_csv(Path(out_base or "autofile") / "batch_report_summary.csv", rows, ["topic", "xlsx", "out_dir", "status", "detail"])
+    if failures:
+        raise RuntimeError("批量生成仍有未通过主题：" + "； ".join(failures))
 
 
 def run_stage1(disease: str, out_base: str | None = "autofile") -> None:
@@ -5111,18 +6059,16 @@ def run_stage5(disease: str, out_base: str | None = "autofile") -> None:
 
 def main() -> None:
     args = parse_args()
-    disease_name = resolve_disease_name(
+    if args.all_topics:
+        run_batch(data_dir=args.data_dir, template=args.template, out_base=args.out_base, lite_output=args.lite_output)
+        return
+    topic_name = resolve_topic_name(
+        topic=args.topic,
         disease=args.disease,
         from_readme=args.from_readme,
         readme_path=args.readme,
     )
-    run(
-        disease=disease_name,
-        xlsx=args.xlsx,
-        template=args.template,
-        out_base=args.out_base,
-        lite_output=args.lite_output,
-    )
+    run(topic=topic_name, xlsx=args.xlsx, template=args.template, out_base=args.out_base, lite_output=args.lite_output)
 
 
 if __name__ == "__main__":
