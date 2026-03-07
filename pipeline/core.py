@@ -3013,7 +3013,42 @@ def save_figure(path: Path, fig) -> None:
     plt.close(fig)
 
 
+def estimate_flow_box_width(
+    text: str,
+    min_width: float = 0.10,
+    max_width: float = 0.22,
+    base: float = 0.064,
+    char_step: float = 0.0070,
+) -> float:
+    raw = normalize_disease_text(text).replace("\n", "").strip()
+    visual_len = 0.0
+    for char in raw:
+        if char.isspace():
+            continue
+        visual_len += 0.62 if ord(char) < 128 else 1.0
+    return min(max_width, max(min_width, base + visual_len * char_step))
+
+
+def suggest_flow_figsize(nodes: List[str], direction: str, figsize: Tuple[float, float]) -> Tuple[float, float]:
+    width, height = float(figsize[0]), float(figsize[1])
+    if direction != "lr":
+        return (width, height)
+    total_visual = sum(
+        max(
+            1.0,
+            sum(
+                0.62 if (not ch.isspace() and ord(ch) < 128) else (1.0 if not ch.isspace() else 0.0)
+                for ch in normalize_disease_text(text)
+            ),
+        )
+        for text in nodes
+    )
+    suggested_width = min(13.8, max(width, 1.55 * max(len(nodes), 1) + 0.10 * total_visual))
+    return (suggested_width, height)
+
+
 def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = "lr", color: str = "#2B6CB0", figsize=(10, 3.5)) -> None:
+    figsize = suggest_flow_figsize(nodes, direction, figsize)
     fig, ax = plt.subplots(figsize=figsize)
     ax.axis("off")
     ax.set_xlim(0, 1)
@@ -3021,21 +3056,39 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
 
     n_nodes = max(len(nodes), 1)
 
-    def _flow_box_size(text: str) -> float:
-        raw = normalize_disease_text(text).replace("\n", "").strip()
-        return min(0.20, max(0.12, 0.075 + len(raw) * 0.0065))
-
     if direction == "lr":
-        widths = [_flow_box_size(text) for text in nodes]
-        gap = 0.048 if n_nodes >= 5 else 0.06
-        available = 0.86
-        total_width = sum(widths) + gap * max(0, n_nodes - 1)
-        if total_width > available and sum(widths) > 0:
-            scale = max(0.60, (available - gap * max(0, n_nodes - 1)) / sum(widths))
-            widths = [max(0.11, w * scale) for w in widths]
+        widths = [estimate_flow_box_width(text, min_width=0.10, max_width=0.20) for text in nodes]
+        left_margin = 0.05
+        right_margin = 0.05
+        available = 1.0 - left_margin - right_margin
+        min_gap = 0.058 if n_nodes >= 5 else 0.070
+        max_gap = 0.11
+        if n_nodes > 1:
+            target_width = max(available - min_gap * (n_nodes - 1), 0.10 * n_nodes)
+        else:
+            target_width = available
+        if sum(widths) > target_width and sum(widths) > 0:
+            scale = target_width / sum(widths)
+            widths = [max(0.10, w * scale) for w in widths]
+
+        content_width = sum(widths)
+        if n_nodes > 1:
+            gap = min(max_gap, max(min_gap, (available - content_width) / (n_nodes - 1)))
+            total_width = content_width + gap * (n_nodes - 1)
+            if total_width > available and content_width > 0:
+                target_width = max(available - gap * (n_nodes - 1), 0.10 * n_nodes)
+                scale = min(1.0, target_width / content_width)
+                widths = [max(0.10, w * scale) for w in widths]
+                content_width = sum(widths)
+                if content_width + gap * (n_nodes - 1) > available:
+                    gap = max(0.040, (available - content_width) / (n_nodes - 1))
+            total_width = content_width + gap * (n_nodes - 1)
+        else:
+            gap = 0.0
+            total_width = content_width
 
         anchors: List[Dict[str, Tuple[float, float]]] = []
-        cursor = 0.07
+        cursor = left_margin + max(0.0, (available - total_width) / 2.0)
         for width, text in zip(widths, nodes):
             x = cursor + width / 2.0
             anchors.append(draw_box_node(ax, x, 0.50, text, width=width, height=0.12, fc="#E6F2FF", ec=color, lw=1.2, fontsize=9.2))
@@ -3046,14 +3099,14 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
             dst = anchors[i + 1]["west"]
             draw_poly_arrow(
                 ax,
-                [(src[0] + 0.020, src[1]), (dst[0] - 0.020, dst[1])],
+                [src, dst],
                 color=color,
                 lw=1.6,
-                shrink_start_pts=10.0,
-                shrink_end_pts=10.0,
+                shrink_start_pts=7.0,
+                shrink_end_pts=7.0,
             )
     else:
-        heights = [_flow_box_size(text) * 0.72 for text in nodes]
+        heights = [estimate_flow_box_width(text, min_width=0.13, max_width=0.22) * 0.72 for text in nodes]
         gap = 0.05
         available = 0.82
         total_height = sum(heights) + gap * max(0, n_nodes - 1)
@@ -3073,11 +3126,11 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
             dst = anchors[i + 1]["north"]
             draw_poly_arrow(
                 ax,
-                [(src[0], src[1] - 0.020), (dst[0], dst[1] + 0.020)],
+                [src, dst],
                 color=color,
                 lw=1.6,
-                shrink_start_pts=10.0,
-                shrink_end_pts=10.0,
+                shrink_start_pts=7.0,
+                shrink_end_pts=7.0,
             )
 
     ax.set_title(normalize_disease_text(title), fontsize=12, pad=10, fontweight="bold")
@@ -4247,8 +4300,10 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     rendered_title_rows.append({"fig_id": "fig_6_1", "rendered_title": normalize_disease_text(title_6_1)})
     add_fig_meta("fig_6_1", title_6_1, "时间轴", "政府公开文件", "政策环境", "N/A", "6.1", "政策环境", "数据来源：国家卫健委、国家药监局、国家医保局")
 
-    fig, ax = plt.subplots(figsize=(8.0, 3.3))
+    fig, ax = plt.subplots(figsize=(9.2, 3.5))
     ax.axis("off")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
     boxes = [("审评审批", (0.10, 0.62)), ("质量控制", (0.33, 0.62)), ("医保支付", (0.56, 0.62)), ("终端执行", (0.79, 0.62)), ("用药结构优化", (0.45, 0.28))]
     boxes_cfg = fig_spec("fig_6_2").get("boxes")
     if isinstance(boxes_cfg, list) and boxes_cfg:
@@ -4271,9 +4326,18 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
                     continue
         if new_boxes:
             boxes = new_boxes
-    for text, (x, y) in boxes:
-        ax.text(x, y, text, ha="center", va="center", fontsize=10, bbox=dict(boxstyle="round,pad=0.35", fc="#F7FAFC", ec="#2D3748"))
-    arrows = [((0.16, 0.62), (0.27, 0.62)), ((0.39, 0.62), (0.50, 0.62)), ((0.62, 0.62), (0.73, 0.62)), ((0.56, 0.56), (0.49, 0.35))]
+    box_anchors: List[Dict[str, Tuple[float, float]]] = []
+    for idx, (text, (x, y)) in enumerate(boxes):
+        width = estimate_flow_box_width(text, min_width=0.11, max_width=0.20, base=0.068, char_step=0.0072)
+        if idx == len(boxes) - 1:
+            width = max(width, 0.16)
+        box_anchors.append(draw_box_node(ax, x, y, text, width=width, height=0.115, fc="#F7FAFC", ec="#2D3748", lw=1.2, fontsize=10.0))
+    arrows = [
+        (box_anchors[0]["east"], box_anchors[1]["west"]),
+        (box_anchors[1]["east"], box_anchors[2]["west"]),
+        (box_anchors[2]["east"], box_anchors[3]["west"]),
+        (box_anchors[2]["south"], box_anchors[4]["north"]),
+    ]
     arrows_cfg = fig_spec("fig_6_2").get("arrows")
     if isinstance(arrows_cfg, list) and arrows_cfg:
         new_arrows: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
@@ -4296,7 +4360,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         if new_arrows:
             arrows = new_arrows
     for (x1, y1), (x2, y2) in arrows:
-        ax.annotate("", xy=(x2, y2), xytext=(x1, y1), arrowprops=dict(arrowstyle="->", lw=1.4, color="#2B6CB0"))
+        draw_poly_arrow(ax, [(x1, y1), (x2, y2)], color="#2B6CB0", lw=1.5, shrink_start_pts=7.0, shrink_end_pts=7.0)
     set_main_title(ax, "fig_6_2", "图表6-2：医保支付与监管联动对用药结构的影响路径", fontsize=12, fontweight="bold")
     save_figure(FIG_DIR / "fig_6_2.png", fig)
     add_fig_meta("fig_6_2", "图表6-2：医保支付与监管联动对用药结构的影响路径", "路径图", "政策公开文件整理", "监管趋势", "N/A", "6.2", "监管趋势", "数据来源：国家医保局、国家药监局")
