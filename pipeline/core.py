@@ -74,6 +74,9 @@ FIG23_CODEX_SPEC_NAME = "fig23_codex_spec.json"
 FIG23_CODEX_SPEC_TEMPLATE_NAME = "fig23_codex_spec_template.json"
 FIG23_CODEX_PROMPT_NAME = "fig23_codex_prompt.txt"
 CODEX_CONTENT_BLUEPRINT_NAME = "codex_content_blueprint.txt"
+FIGURE_SPECS_CODEX_TEMPLATE_NAME = "figure_specs_codex_template.json"
+FIGURE_SPECS_CODEX_PROMPT_NAME = "figure_specs_codex_prompt.txt"
+SEMANTIC_REVIEW_PROMPT_NAME = "semantic_review_prompt.txt"
 CHAPTER_MIN_CHARS = {
     1: 3000,
     2: 3500,
@@ -2481,29 +2484,145 @@ def _topic_fig23_nodes(ctx: Dict[str, str]) -> Tuple[List[str], str, List[str]]:
 
 def ensure_fig23_codex_spec_ready() -> None:
     path = OUT_ROOT / FIG23_CODEX_SPEC_NAME
-    if path.exists():
+    if not path.exists():
         return
-    ctx = infer_topic_context()
-    left_nodes, core_label, right_nodes = _topic_fig23_nodes(ctx)
-    payload = {
-        "schema_version": "fig23_codex_v1",
-        "topic": DISEASE_NAME,
-        "disease": DISEASE_NAME,
-        "authored_by": "codex",
-        "layout_mode": "layered_path",
-        "title": compose_figure_title("2-3", f"{DISEASE_NAME}关键关系分层路径图"),
-        "caption": compose_figure_title("2-3", f"{DISEASE_NAME}关键关系分层路径图"),
-        "source_line": "数据来源：临床指南、专家共识、国家政策文件与公开系统综述整理",
-        "layered_path": {
-            "left_title": "上游决定因素",
-            "center_title": "核心机制/价值链路",
-            "right_title": "下游后果与管理结果",
-            "left_nodes": left_nodes,
-            "core_label": core_label,
-            "right_nodes": right_nodes,
+    raw = read_fig23_codex_spec()
+    if not raw:
+        raise RuntimeError(
+            f"Invalid Codex fig23 spec: {path}. Please rewrite it using {OUT_ROOT / FIG23_CODEX_PROMPT_NAME}."
+        )
+
+
+def build_semantic_figure_specs_template() -> Dict[str, Dict[str, object]]:
+    if is_cervical_profile():
+        fig13_title = f"{DISEASE_NAME}病理生理演进路径"
+        fig13_nodes = ["椎间盘退变", "椎体边缘骨赘", "椎管/椎间孔狭窄", "神经结构受压", "疼痛与功能障碍"]
+        fig31_title = f"{DISEASE_NAME}临床诊疗流程"
+        fig31_nodes = ["首诊分层", "神经体征检查", "影像评估", "保守治疗", "复评分流", "介入/手术"]
+        fig53_title = f"{DISEASE_NAME}全周期管理流程"
+        fig53_nodes = ["症状识别", "初诊评估", "治疗启动", "复评调整", "复发预防", "长期随访"]
+    elif is_gastritis_profile():
+        fig13_title = f"{DISEASE_NAME}病理演进链路"
+        fig13_nodes = ["病因暴露", "慢性炎症", "腺体萎缩", "肠上皮化生", "风险升级"]
+        fig31_title = f"{DISEASE_NAME}临床诊疗流程"
+        fig31_nodes = ["症状与红旗征筛查", "Hp检测", "内镜+病理分级", "病因分层", "治疗执行", "复查随访"]
+        fig53_title = f"{DISEASE_NAME}长期管理流程"
+        fig53_nodes = ["症状出现", "初诊评估", "病因分层", "治疗执行", "复查评估", "长期随访"]
+    elif is_respiratory_profile():
+        fig13_title = f"{DISEASE_NAME}病理生理演进路径"
+        fig13_nodes = ["感染/过敏触发", "炎症与分泌增加", "痰液黏稠", "排痰受阻", "持续咳嗽"]
+        fig31_title = f"{DISEASE_NAME}临床诊疗流程"
+        fig31_nodes = ["首诊分诊", "病因评估", "风险分层", "治疗启动", "复评调整", "出院/随访"]
+        fig53_title = f"{DISEASE_NAME}全周期管理流程"
+        fig53_nodes = ["首发症状", "初诊评估", "治疗启动", "功能恢复", "复发预防", "长期随访"]
+    else:
+        fig13_title = f"{DISEASE_NAME}病理生理演进路径"
+        fig13_nodes = ["风险暴露", "病理改变", "功能受损", "症状负担上升", "分层管理"]
+        fig31_title = f"{DISEASE_NAME}临床诊疗流程"
+        fig31_nodes = ["首诊评估", "病因识别", "风险分层", "治疗启动", "复评校准", "长期管理"]
+        fig53_title = f"{DISEASE_NAME}全周期管理流程"
+        fig53_nodes = ["症状识别", "初诊评估", "治疗启动", "复评调整", "复发预防", "长期随访"]
+
+    fig62_title = "图表6-2：医保支付与监管联动对用药结构的影响路径"
+    fig62_boxes = [
+        {"label": "审评审批", "x": 0.10, "y": 0.62},
+        {"label": "质量控制", "x": 0.33, "y": 0.62},
+        {"label": "医保支付", "x": 0.56, "y": 0.62},
+        {"label": "终端执行", "x": 0.79, "y": 0.62},
+        {"label": "用药结构优化", "x": 0.45, "y": 0.28},
+    ]
+    fig62_arrows = [
+        {"x1": 0.16, "y1": 0.62, "x2": 0.27, "y2": 0.62},
+        {"x1": 0.39, "y1": 0.62, "x2": 0.50, "y2": 0.62},
+        {"x1": 0.62, "y1": 0.62, "x2": 0.73, "y2": 0.62},
+        {"x1": 0.56, "y1": 0.56, "x2": 0.49, "y2": 0.35},
+    ]
+
+    return {
+        "fig_1_3": {
+            "flow_title": fig13_title,
+            "nodes": fig13_nodes,
+            "source_line": "REPLACE_WITH_SPECIFIC_SOURCE_LINE",
+        },
+        "fig_3_1": {
+            "flow_title": fig31_title,
+            "nodes": fig31_nodes,
+            "source_line": "REPLACE_WITH_SPECIFIC_SOURCE_LINE",
+        },
+        "fig_5_3": {
+            "flow_title": fig53_title,
+            "nodes": fig53_nodes,
+            "source_line": "REPLACE_WITH_SPECIFIC_SOURCE_LINE",
+        },
+        "fig_6_2": {
+            "title": fig62_title,
+            "boxes": fig62_boxes,
+            "arrows": fig62_arrows,
+            "source_line": "REPLACE_WITH_SPECIFIC_SOURCE_LINE",
         },
     }
-    write_json(path, payload)
+
+
+def build_figure_specs_codex_prompt() -> str:
+    return "\n".join(
+        [
+            "[Codex Semantic Figure Spec Task]",
+            f"Goal: if topic semantics need better control, write {OUT_ROOT / 'figure_specs.json'} using {OUT_ROOT / FIGURE_SPECS_CODEX_TEMPLATE_NAME} as the starting point.",
+            "",
+            "[Scope]",
+            "- This file is only for semantic figures such as fig_1_3, fig_3_1, fig_5_3, and fig_6_2.",
+            "- Do not use it to invent Chapter-4 market data or override Excel-derived charts.",
+            "",
+            "[Read First]",
+            f"1) {OUT_ROOT / 'ch01.txt'}",
+            f"2) {OUT_ROOT / 'ch03.txt'}",
+            f"3) {OUT_ROOT / 'ch05.txt'}",
+            f"4) {OUT_ROOT / 'ch06.txt'}",
+            f"5) {OUT_ROOT / '00_evidence.txt'}",
+            f"6) {OUT_ROOT / FIGURE_SPECS_CODEX_TEMPLATE_NAME}",
+            "",
+            "[Hard Rules]",
+            "1) Keep figure meaning aligned with the chapter argument instead of using generic placeholder flowcharts.",
+            "2) Prefer fewer, clearer nodes over dense diagrams.",
+            "3) Shorten labels before adding more boxes or arrows.",
+            "4) For fig_6_2, keep enough whitespace so arrows do not collide with boxes.",
+            "5) Every source_line must be specific enough to survive QA.",
+            "",
+            "[Done Means]",
+            f"- Save the final override file to {OUT_ROOT / 'figure_specs.json'}.",
+            "- If the built-in defaults are already correct, you may keep the file minimal and only override what truly needs semantic control.",
+        ]
+    )
+
+
+def build_semantic_review_prompt() -> str:
+    return "\n".join(
+        [
+            "[Codex Semantic Review Task]",
+            "Review the body-summary logic and the key semantic figures together:",
+            f"- {OUT_ROOT / 'ch01.txt'}",
+            f"- {OUT_ROOT / 'ch03.txt'}",
+            f"- {OUT_ROOT / 'ch05.txt'}",
+            f"- {OUT_ROOT / 'ch06.txt'}",
+            f"- {OUT_ROOT / 'summary.txt'}",
+            f"- {FIG_DIR / 'fig_1_3.png'}",
+            f"- {FIG_DIR / 'fig_3_1.png'}",
+            f"- {FIG_DIR / 'fig_5_3.png'}",
+            f"- {FIG_DIR / 'fig_6_2.png'}",
+            "",
+            "[Check List]",
+            "- Does the narrative stay specific to the topic instead of collapsing into generic disease-market language?",
+            "- Do the key figures match the chapter logic rather than acting as interchangeable placeholders?",
+            "- Are summary conclusions actually supported by the chapter body and figure semantics?",
+            "- Are there over-generalized claims, weak causal jumps, or obvious management-jargon filler?",
+            "",
+            "[Return Format]",
+            "1) Verdict: PASS / FAIL",
+            "2) Must-fix text issues: none / bullet list",
+            "3) Must-fix figure issues: none / bullet list",
+            "4) Suggested edits: direct file-level recommendations with the smallest useful changes first",
+        ]
+    )
 
 
 def _df_to_records(df: pd.DataFrame, columns: List[str]) -> List[Dict[str, object]]:
@@ -2956,9 +3075,8 @@ def auto_write_topic_text_bundle(ch4: Ch4Data) -> None:
 
 def ensure_autodraft_assets_ready() -> None:
     ensure_ch4_extract_ready(EXCEL_PATH)
-    ch4 = build_ch4_data(EXCEL_PATH)
-    ensure_fig23_codex_spec_ready()
-    auto_write_topic_text_bundle(ch4)
+    # Codex-first workflow: script prepares structured inputs and prompt assets,
+    # but no longer auto-writes topic text or fig23 semantics.
 
 
 def make_manifest_files(specs: List[BlockSpec], fig_rows: List[Dict[str, str]]) -> None:
@@ -5082,56 +5200,78 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
     medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
     total_chars = sum(chapter_chars.values()) + len(re.sub(r"\s+", "", summary_text))
     total_gap = max(0, 30000 - total_chars)
+    summary_chars = len(re.sub(r"\s+", "", summary_text))
 
     chapter_to_specs: Dict[int, List[BlockSpec]] = {}
-    for s in specs:
-        chapter_to_specs.setdefault(s.chapter, []).append(s)
+    for spec in specs:
+        chapter_to_specs.setdefault(spec.chapter, []).append(spec)
 
-    lines = [
-        "【Codex补写提示词】",
-        f"医学主题：{DISEASE_NAME}",
-        f"当前总字数（章节+总结，去空白）：{total_chars}",
-        "目标总字数：30000-34000",
-        f"当前至少仍需补写：{total_gap}字",
-        "",
-        "请基于现有内容直接扩写/重写 autofile/<医学主题>/ch01.txt ~ ch07.txt 与 summary.txt，并严格满足以下要求：",
-        "1) 每章必须达到脚本最低字数门槛，且全文总字数必须在30000-34000之间。",
-        "2) 每段尽量包含具体医学或市场事实锚点，避免空话、套话、管理咨询黑话。",
-        "3) 引用编号必须保留并尽量分散到各段，不能只在段尾堆砌。",
-        "4) 第1-3章优先补足病因分层、病理机制、诊断路径、治疗证据、风险边界与红旗征。",
-        "5) 第4章只能基于Excel与已生成图表口径写作，不得杜撰额外市场数字。",
-        "6) 第5-7章要补足人群分层、临床路径差异、依从性机制、政策约束、预测假设与战略动作。",
-        "7) 非第4章图表的数据来源描述必须具体，禁止只写“公开资料整理”。",
-        "",
-        "【章节缺口】",
-    ]
+    chapter_rows: List[Tuple[int, int, int, int]] = []
     for chapter in range(1, 8):
         current_chars = int(chapter_chars.get(chapter, 0))
         min_chars = int(CHAPTER_MIN_CHARS.get(chapter, 0))
         gap = max(0, min_chars - current_chars)
-        status = "未达标" if gap > 0 else "已达标"
-        lines.append(f"- 第{chapter}章：当前{current_chars}字，最低{min_chars}字，缺口{gap}字（{status}）")
+        chapter_rows.append((chapter, current_chars, min_chars, gap))
+
+    priority_chapters = [f"Chapter {chapter} ({gap} chars short)" for chapter, _, _, gap in sorted(chapter_rows, key=lambda item: item[3], reverse=True) if gap > 0]
+
+    lines = [
+        "[Codex Rewrite Task]",
+        f"Topic: {DISEASE_NAME}",
+        f"Current total chars (chapters + summary, no whitespace): {total_chars}",
+        "Target total chars: 30000-34000",
+        f"Minimum chars still needed: {total_gap}",
+        f"Current summary chars: {summary_chars} (recommended: 1200-1500)",
+        "",
+        "[Primary Goal]",
+        "- Directly rewrite and overwrite ch01.txt ~ ch07.txt and summary.txt.",
+        "- Hit the gate in one pass instead of writing an obviously under-length draft first.",
+        "- Any newly added content must be grounded in the evidence pool, existing figure scope, or chapter-4 structured data.",
+        "",
+        "[Hard Rules]",
+        "1) Every chapter must pass the script minimum, and the full draft must stay within 30000-34000 chars.",
+        "2) Chapter 4 may only use Excel-derived facts, ch04_codex_extract.json, and generated figure scope. Do not invent new market numbers.",
+        "3) New medical, policy, or pathway claims must be traceable to 00_evidence.txt, refs.txt, manifest_fig.csv, or the existing draft context.",
+        "4) Keep citation numbering consistent. Do not fabricate citation IDs.",
+        "5) Prioritize cause stratification, mechanism, diagnosis, evidence, boundaries, and red flags in Chapters 1-3.",
+        "6) Prioritize segmentation, pathway differences, adherence mechanisms, policy constraints, forecast assumptions, and strategy actions in Chapters 5-7.",
+        "7) Non-chapter-4 figure source lines must be specific. Do not use only 'public source??' style placeholders.",
+        "8) Avoid empty management jargon. Each paragraph should carry a real medical or market anchor.",
+        "",
+        "[Suggested Order]",
+        ("- Fix under-length chapters first: " + ", ".join(priority_chapters)) if priority_chapters else "- Chapter lengths already pass; focus on weak blocks and summary quality first.",
+        "- Then fix low-anchor blocks: " + (", ".join(low_anchor_blocks) if low_anchor_blocks else "none"),
+        "- Then fix low-medical-density blocks: " + (", ".join(medical_density_failed) if medical_density_failed else "none"),
+        "- Rewrite the summary last so it reflects the final body instead of duplicating the outline.",
+        "",
+        "[Chapter Tasks]",
+    ]
+    for chapter, current_chars, min_chars, gap in chapter_rows:
+        status = "below gate" if gap > 0 else "pass"
+        lines.append(f"- Chapter {chapter}: current={current_chars}, minimum={min_chars}, gap={gap} ({status})")
         for spec in chapter_to_specs.get(chapter, []):
-            topic_text = "、".join(spec.topics)
-            fig_text = spec.fig_ids if spec.fig_ids else "无"
+            topic_text = ", ".join(spec.topics)
+            fig_text = spec.fig_ids if spec.fig_ids else "none"
             lines.append(
-                f"  - {spec.block_id} {spec.subtitle} | 目标{spec.target_chars}字 | 重点主题：{topic_text} | 证据：{spec.evidence_ids} | 图表：{fig_text}"
+                f"  - {spec.block_id} {spec.subtitle} | block target={spec.target_chars} | focus={topic_text} | evidence={spec.evidence_ids} | figures={fig_text}"
             )
     lines.extend(
         [
             "",
-            "【当前薄弱点】",
-            "- 分章字数未达标：" + (", ".join(chapter_len_fails) if chapter_len_fails else "无"),
-            "- 事实锚点不足block：" + (", ".join(low_anchor_blocks) if low_anchor_blocks else "无"),
-            "- 第1-3章医学密度不足block：" + (", ".join(medical_density_failed) if medical_density_failed else "无"),
+            "[Current Weak Spots]",
+            "- Under-length chapters: " + (", ".join(chapter_len_fails) if chapter_len_fails else "none"),
+            "- Low-anchor blocks: " + (", ".join(low_anchor_blocks) if low_anchor_blocks else "none"),
+            "- Low medical density blocks (chapters 1-3): " + (", ".join(medical_density_failed) if medical_density_failed else "none"),
             "",
-            "【建议执行方式】",
-            f"- 直接覆写：{OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
-            f"- 同步补足：{OUT_ROOT / 'summary.txt'}",
-            f"- 完成后重跑：python scripts/run_pipeline.py --topic \"{DISEASE_NAME}\"",
+            "[Delivery]",
+            f"- Overwrite: {OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
+            f"- Overwrite: {OUT_ROOT / 'summary.txt'}",
+            "- Do not write any new artifact to the repo root.",
+            f"- Re-run after rewriting: python scripts/run_pipeline.py --topic \"{DISEASE_NAME}\"",
         ]
     )
     return "\n".join(lines)
+
 
 
 def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
@@ -5146,35 +5286,58 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
     draft_ceiling = 33000
 
     lines = [
-        "【Codex写作前置蓝图】",
-        f"医学主题：{DISEASE_NAME}",
-        f"建议初稿总字数：{draft_floor}-{draft_ceiling}",
-        "目标原则：初稿直接达标，避免先欠字数、后补字数。",
-        "执行原则：每章至少高于硬门槛150-300字；总结建议1200-1500字。",
+        "[Codex Writing Blueprint]",
+        f"Topic: {DISEASE_NAME}",
+        f"Recommended first-draft total chars: {draft_floor}-{draft_ceiling}",
+        "Goal: land a gate-ready first draft instead of backfilling later.",
+        "Rule of thumb: keep each chapter 150-300 chars above the hard floor; summary should usually be 1200-1500 chars.",
         "",
-        "【章节目标】",
+        "[Read First]",
+        f"1) {OUT_ROOT / '00_evidence.txt'}",
+        f"2) {OUT_ROOT / 'manifest_text.csv'}",
+        f"3) {OUT_ROOT / 'manifest_fig.csv'}",
+        f"4) {OUT_ROOT / 'ch04_codex_extract.json'}",
+        f"5) {OUT_ROOT / 'figure_specs.json'} (if present)",
+        "",
+        "[Output Files]",
+        f"- {OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
+        f"- {OUT_ROOT / 'summary.txt'}",
+        "- Keep all generated or overwritten files inside the current autofile topic folder.",
+        "",
+        "[Hard Writing Rules]",
+        "1) Finish the body first, then write the summary.",
+        "2) Chapter 4 must stay inside Excel-derived scope only. Do not add new market numbers, shares, or growth rates.",
+        "3) Each paragraph should contain concrete anchors: mechanism, pathway, evidence, policy basis, figure scope, or market fact.",
+        "4) Keep citations consistent and distributed across paragraphs instead of clustering them at the end.",
+        "5) Non-chapter-4 figure source lines must be specific to guideline/review/institution level.",
+        "6) If evidence is weak, narrow the claim boundary instead of padding with generic language.",
+        "7) If fig_2_3 is not ready, write fig23_codex_spec.json first before stage3-stage5.",
+        "",
+        "[Chapter Targets]",
     ]
     for chapter in range(1, 8):
         floor = int(CHAPTER_MIN_CHARS.get(chapter, 0))
         target = int(max(chapter_target_map.get(chapter, floor), floor + 200))
-        lines.append(f"- 第{chapter}章：硬门槛{floor}字；建议初稿目标{target}-{target + 200}字")
+        lines.append(f"- Chapter {chapter}: hard floor={floor}; recommended first-draft target={target}-{target + 200}")
         for spec in chapter_to_specs.get(chapter, []):
-            topic_text = "、".join(spec.topics)
-            fig_text = spec.fig_ids if spec.fig_ids else "无"
+            topic_text = ", ".join(spec.topics)
+            fig_text = spec.fig_ids if spec.fig_ids else "none"
             lines.append(
-                f"  - {spec.block_id} {spec.subtitle} | block目标{spec.target_chars}字 | 重点主题：{topic_text} | 证据：{spec.evidence_ids} | 图表：{fig_text}"
+                f"  - {spec.block_id} {spec.subtitle} | block target={spec.target_chars} | focus={topic_text} | evidence={spec.evidence_ids} | figures={fig_text}"
             )
     lines.extend(
         [
             "",
-            "【写作顺序建议】",
-            f"1) 先按 {OUT_ROOT / '00_evidence.txt'} 与 {OUT_ROOT / 'manifest_text.csv'} 完成正文",
-            f"2) 再单独写 {OUT_ROOT / 'summary.txt'}，避免总结挤占正文篇幅",
-            f"3) 图表2-3 先由当前 Codex 会话写入 {OUT_ROOT / FIG23_CODEX_SPEC_NAME}，再运行 stage3-stage5",
-            "4) 非第4章图表的数据来源行必须具体到指南/综述/机构，不得只写“公开资料整理”",
+            "[Suggested Workflow]",
+            "1) Read the evidence pool, text manifest, figure manifest, and chapter-4 structured data before writing.",
+            "2) Write Chapters 1-3 first, then Chapter 4, then Chapters 5-7.",
+            "3) Write the summary last so it reflects the final logic instead of repeating the table of contents.",
+            "4) Run stage3-stage5 after the body is complete.",
+            f"5) Command: python scripts/run_pipeline.py --topic \"{DISEASE_NAME}\"",
         ]
     )
     return "\n".join(lines)
+
 
 
 def build_fig23_codex_spec_template() -> Dict[str, object]:
@@ -5209,20 +5372,41 @@ def build_fig23_codex_spec_template() -> Dict[str, object]:
 def build_fig23_codex_prompt() -> str:
     return "\n".join(
         [
-            "【Codex关系图前置任务】",
-            f"请先阅读：{OUT_ROOT / 'ch02.txt'}、{OUT_ROOT / '00_evidence.txt'}、{OUT_ROOT / 'figure_specs.json'}",
-            f"然后由当前 Codex 会话写入：{OUT_ROOT / FIG23_CODEX_SPEC_NAME}",
-            f"模板参考：{OUT_ROOT / FIG23_CODEX_SPEC_TEMPLATE_NAME}",
+            "[Codex fig_2_3 Authoring Task]",
+            f"Goal: write only {OUT_ROOT / FIG23_CODEX_SPEC_NAME}. Do not create extra markdown or free-form explanation files.",
             "",
-            "强制要求：",
-            "1) authored_by 必须为 codex；layout_mode 优先使用 layered_path，必要时才用 dual_panel。",
-            "2) 首选表达为“上游决定因素 → 核心病理/修复过程 → 下游后果与管理结果”的分层路径图。",
-            "3) 每侧优先控制在 3 个节点左右；优先减少节点数量，不要用 generic systems_map 塞满节点。",
-            "4) 若使用 layered_path，应尽量避免交叉线；若使用 dual_panel，所有箭头必须通过 via / sign_xy 做几何避让。",
-            "5) title / caption 可写完整图题，也可只写题干；脚本会自动去重图表序号。",
-            "6) source_line 必须写成具体来源行，不得只写“公开资料整理”。",
+            "[Read First]",
+            f"1) {OUT_ROOT / 'ch02.txt'}",
+            f"2) {OUT_ROOT / '00_evidence.txt'}",
+            f"3) {OUT_ROOT / 'figure_specs.json'} (if present)",
+            f"4) {OUT_ROOT / FIG23_CODEX_SPEC_TEMPLATE_NAME}",
+            "",
+            "[Output Rules]",
+            "1) authored_by must be codex.",
+            "2) Prefer layout_mode=layered_path; use dual_panel only when layered_path cannot keep the figure readable.",
+            "3) title/caption may be full or short, because the script normalizes figure numbering.",
+            "4) source_line must be specific to guideline/review/institution level.",
+            "5) If using layered_path, fill left_nodes, core_label, and right_nodes.",
+            "6) If using dual_panel, key edges must use via/sign_xy to avoid geometry collisions.",
+            "",
+            "[Semantic Rules]",
+            "- Prefer a simple upstream -> core mechanism -> downstream outcome/management path.",
+            "- Keep 2-3 nodes per side whenever possible.",
+            "- Reduce node count before adding more geometry complexity.",
+            "- Keep layer semantics consistent; do not mix systems, mechanisms, and management outcomes at the same level without reason.",
+            "",
+            "[Visual Rules]",
+            "- No same-layer crowding.",
+            "- No arrows touching text boxes too closely or crossing over label text.",
+            "- Avoid unnecessary line crossings.",
+            "- If a label is too long, shorten it first; only then consider explicit line breaks.",
+            "",
+            "[Done Means]",
+            f"- The JSON at {OUT_ROOT / FIG23_CODEX_SPEC_NAME} can be consumed by stage3 directly.",
+            "- If uncertain, delete weak nodes and preserve readability.",
         ]
     )
+
 
 
 def write_codex_preflight_assets() -> None:
@@ -5230,29 +5414,41 @@ def write_codex_preflight_assets() -> None:
     write_text(OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME, build_codex_content_blueprint(specs) + "\n")
     write_json(OUT_ROOT / FIG23_CODEX_SPEC_TEMPLATE_NAME, build_fig23_codex_spec_template())
     write_text(OUT_ROOT / FIG23_CODEX_PROMPT_NAME, build_fig23_codex_prompt() + "\n")
+    write_json(OUT_ROOT / FIGURE_SPECS_CODEX_TEMPLATE_NAME, build_semantic_figure_specs_template())
+    write_text(OUT_ROOT / FIGURE_SPECS_CODEX_PROMPT_NAME, build_figure_specs_codex_prompt() + "\n")
+    write_text(OUT_ROOT / SEMANTIC_REVIEW_PROMPT_NAME, build_semantic_review_prompt() + "\n")
 
 
 def build_fig23_review_prompt() -> str:
     return "\n".join(
         [
-            "请读取并审核以下图与配置：",
+            "[fig_2_3 Visual Review Task]",
+            "Review both the rendered figure and its config:",
             f"1) {FIG_DIR / 'fig_2_3.png'}",
             f"2) {OUT_ROOT / FIG23_CODEX_SPEC_NAME}",
             "",
-            "请按以下清单逐项判定“通过/不通过”，并给出可直接落地的配置修订建议：",
-            "- 因果方向是否合理",
-            "- 是否存在同轨重叠、箭头贴边或线条覆盖文本框",
-            "- 节点之间是否留有足够空白（尤其是同层节点不能互相挤压）",
-            "- 双向/虚线关系是否可读（是否做了几何避让）",
-            "- 层级语义是否一致（同层节点是否混合系统与非系统语义）",
-            "- 图题与图意是否一致",
+            "[Check List]",
+            "- Is the causal direction clinically and logically sound?",
+            "- Are there overlaps, arrow-to-box collisions, text coverage, or labels that feel crowded?",
+            "- Is there enough whitespace between nodes, especially within the same layer?",
+            "- Are bidirectional/dashed relations still readable after geometry routing?",
+            "- Are layer semantics internally consistent?",
+            "- Do title, caption, and source_line match the actual figure meaning?",
             "",
-            "若不通过，请优先回写以下配置字段后重跑：",
-            f"- {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 layered_path.left_nodes/core_label/right_nodes",
-            f"- 如必须保留关系网络，再回写 {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 dual_panel.left/right.edges.via",
-            f"- 以及 {OUT_ROOT / FIG23_CODEX_SPEC_NAME} 中的 dual_panel.left/right.edges.sign_xy",
+            "[Return Format]",
+            "Use this exact structure:",
+            "1) Verdict: PASS / FAIL",
+            "2) Must-fix issues: list only the items that block acceptance; write 'none' if empty",
+            "3) Nice-to-improve issues: optional improvements; write 'none' if empty",
+            "4) Suggested field rewrites: give directly usable config edits, prioritizing layered_path.left_nodes / core_label / right_nodes; only mention dual_panel via/sign_xy when needed",
+            "",
+            "[Decision Rule]",
+            "- If the figure is already clear, say PASS explicitly and avoid change-for-change's-sake edits.",
+            "- If it fails, prefer the smallest field changes that restore readability.",
+            "- If the graph is too dense, remove nodes before adding more routing lines.",
         ]
     )
+
 
 
 def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], summary_text: str) -> Tuple[str, bool]:
@@ -5876,14 +6072,26 @@ def run_stage3_ch4_and_figures() -> None:
         txt_report, txt_passed = run_txt_stage_checks(specs, block_text, summary_text)
         print(txt_report)
         if not txt_passed:
-            raise RuntimeError("TXT闸门未通过，流程已中断。请先按txt_stage_qa.txt与codex_rewrite_prompt.txt补齐总字数与分章字数，再重新执行。")
-        print("阶段3：复用既有章节文本与summary。")
+            raise RuntimeError("TXT gate failed. Please use txt_stage_qa.txt and codex_rewrite_prompt.txt to repair length and chapter gaps before rerunning.")
+        ensure_fig23_codex_spec_ready()
+        if not fig23_codex_authored_ok():
+            raise RuntimeError(
+                f"Missing Codex fig23 spec: {OUT_ROOT / FIG23_CODEX_SPEC_NAME}."
+                f"Please read {OUT_ROOT / FIG23_CODEX_PROMPT_NAME} and rewrite it using {OUT_ROOT / FIG23_CODEX_SPEC_TEMPLATE_NAME}."
+            )
+        if not (OUT_ROOT / "figure_specs.json").exists():
+            print(
+                f"Hint: if you want Codex to control fig_1_3/fig_3_1/fig_5_3/fig_6_2, review {OUT_ROOT / FIGURE_SPECS_CODEX_PROMPT_NAME}. "
+                f"Then write {OUT_ROOT / 'figure_specs.json'} using {OUT_ROOT / FIGURE_SPECS_CODEX_TEMPLATE_NAME}."
+            )
+        print("Stage3: reusing existing chapter text and summary.")
     except (FileNotFoundError, ValueError) as exc:
         raise RuntimeError(
-            "未检测到可复用文本。"
-            f"请先参考 {OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME} 由当前 Codex 会话写入 ch01~ch07.txt/summary.txt/refs.txt，"
-            f"并先完成 {OUT_ROOT / FIG23_CODEX_SPEC_NAME}，"
-            "再执行 python scripts/run_pipeline.py。"
+            "Missing reusable body text. "
+            f"Write ch01~ch07.txt/summary.txt/refs.txt by following {OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME}; "
+            f"if rewriting is needed, use {OUT_ROOT / 'codex_rewrite_prompt.txt'}; "
+            f"write fig23 via {OUT_ROOT / FIG23_CODEX_PROMPT_NAME} -> {OUT_ROOT / FIG23_CODEX_SPEC_NAME}; "
+            f"and for other semantic figures use {OUT_ROOT / FIGURE_SPECS_CODEX_PROMPT_NAME} -> {OUT_ROOT / 'figure_specs.json'}."
         ) from exc
     fig_rows = generate_figures(ch4)
     make_manifest_files(specs, fig_rows)
@@ -5937,8 +6145,8 @@ def run_assist_pipeline() -> None:
         ensure_prewritten_text_ready()
     except Exception as exc:
         raise RuntimeError(
-            "assist链路需要先准备好 AI 写作文本（ch01~ch07.txt、summary.txt）。"
-            "请先由AI写入后再执行脚本。"
+            "Assist mode requires body text written by the current Codex session (ch01~ch07.txt and summary.txt)."
+            f"Please use {OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME} and {OUT_ROOT / 'codex_rewrite_prompt.txt'} before rerunning."
         ) from exc
 
     plan = [
@@ -6026,7 +6234,7 @@ def run(
     )
     configure_output_mode(lite_output)
     print(f"流程模式：{WORKFLOW_MODE}（固定）")
-    print("提示：若正文、图表2-3配置或第四章结构化文件缺失，脚本会按当前医学主题自动补齐后再装配。")
+    print("Hint: the script prepares evidence, chapter-4 structured data, and Codex prompt assets; body text, fig23 config, and semantic figure overrides must be authored by the current Codex session.")
     print("QA闸门：严格（固定，失败即中断）")
     run_stage1_evidence()
     ensure_autodraft_assets_ready()

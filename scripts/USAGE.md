@@ -1,4 +1,4 @@
-# Usage
+﻿# Usage
 
 ## 单主题运行
 
@@ -37,14 +37,23 @@ python scripts/run_pipeline.py --all-topics
 
 若某个 Excel 只包含 `医院品类/医院top`，脚本会自动把缺失的药店端/线上端季度值按 `0` 补齐，并将缺失渠道的 Top10/CR5 保持为空，同时在 `ch04_sheet_map.txt` 中标记。
 
-## 自动补齐行为
+## 自动准备行为
 
-为满足“一键全自动”，脚本在缺失以下文件时会自动生成：
+脚本会自动准备以下确定性或提示性资产：
 
 - `00_evidence.txt`
 - `refs.txt`
 - `ch04_codex_extract.json`
+- `fig23_codex_spec_template.json`
+- `fig23_codex_prompt.txt`
+- `figure_specs_codex_template.json`
+- `figure_specs_codex_prompt.txt`
+- `semantic_review_prompt.txt`
+
+以下文件改为由当前 Codex 会话主导写入，不再由脚本自动代写：
+
 - `fig23_codex_spec.json`
+- `figure_specs.json`（按需）
 - `ch01.txt` ~ `ch07.txt`
 - `summary.txt`
 
@@ -60,3 +69,4 @@ python scripts/run_pipeline.py --all-topics
 - `autofile/batch_report_summary.csv`
 
 若某个主题失败，汇总表中会给出失败原因，CLI 也会在最后抛出汇总错误。
+

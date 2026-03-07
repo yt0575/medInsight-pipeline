@@ -1,4 +1,4 @@
-# medInsight Pipeline 快速入口
+﻿# medInsight Pipeline 快速入口
 
 【医学主题占位符｜你只需改这一行】
 医学主题：<<<在此填写医学主题>>>
@@ -11,10 +11,10 @@
 
 脚本会自动完成以下动作：
 
-- 生成证据池与参考文献
+- 生成证据池、参考文献与 Codex 前置提示资产
 - 若缺失，自动抽取第4章结构化数据到 `autofile/<医学主题>/ch04_codex_extract.json`
-- 若缺失，自动生成 `fig_2_3` 的内容相关分层路径图配置
-- 若缺失，自动起草 `ch01.txt` ~ `ch07.txt` 与 `summary.txt`
+- 自动写出 `fig23_codex_spec_template.json`、`fig23_codex_prompt.txt`、`figure_specs_codex_template.json`、`figure_specs_codex_prompt.txt` 等辅助文件
+- 由当前 Codex 会话主导写入 `ch01.txt` ~ `ch07.txt`、`summary.txt`、`fig23_codex_spec.json`，并按需回写 `figure_specs.json`
 - 装配最终 Word，并执行严格 QA
 
 ## 2) 输入要求
@@ -72,3 +72,4 @@ python scripts/run_pipeline.py --all-topics
 - 若你把很多 Excel 放进 `data/`，直接执行 `--all-topics` 即可逐份生成并逐份检查
 - 详细参数见 `scripts/USAGE.md`
 - 架构说明见 `pipeline/ARCHITECTURE.md`
+
