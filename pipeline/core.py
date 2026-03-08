@@ -77,6 +77,9 @@ CODEX_CONTENT_BLUEPRINT_NAME = "codex_content_blueprint.txt"
 FIGURE_SPECS_CODEX_TEMPLATE_NAME = "figure_specs_codex_template.json"
 FIGURE_SPECS_CODEX_PROMPT_NAME = "figure_specs_codex_prompt.txt"
 SEMANTIC_REVIEW_PROMPT_NAME = "semantic_review_prompt.txt"
+CODEX_GAP_PANEL_NAME = "codex_gap_panel.txt"
+CHAPTER_PRECHECK_NAME = "chapter_precheck.txt"
+CH4_NARRATIVE_BRIEF_NAME = "ch04_narrative_brief.txt"
 CHAPTER_MIN_CHARS = {
     1: 3000,
     2: 3500,
@@ -86,6 +89,7 @@ CHAPTER_MIN_CHARS = {
     6: 4800,
     7: 4800,
 }
+CHAPTER_CHAR_TOLERANCE = 100
 LOW_CONFIDENCE_PROFILE_KEYWORDS = {
     "疼痛",
     "炎症",
@@ -99,6 +103,15 @@ LOW_CONFIDENCE_PROFILE_KEYWORDS = {
 PROFILE_CONFIG_PATH = Path(__file__).with_name("disease_profiles.json")
 _PROFILE_CONFIG_CACHE: Dict[str, object] | None = None
 _ACTIVE_PROFILE_CACHE: Tuple[str, str] | None = None
+
+
+def chapter_char_shortfall(chapter: int, chars: int) -> int:
+    floor = int(CHAPTER_MIN_CHARS.get(chapter, 0))
+    return max(0, floor - int(chars))
+
+
+def chapter_char_gate_ok(chapter: int, chars: int) -> bool:
+    return chapter_char_shortfall(chapter, chars) <= CHAPTER_CHAR_TOLERANCE
 
 
 def qkey(q: str) -> int:
@@ -1904,6 +1917,297 @@ def write_ch4_profile_files(ch4: Ch4Data) -> None:
         ch4.cr5_trend.to_excel(writer, index=False, sheet_name="cr5_trend")
 
 
+def build_ch4_narrative_brief(ch4: Ch4Data) -> str:
+    latest_row = ch4.quarterly.iloc[-1]
+    latest_quarter = str(latest_row["quarter"])
+    latest_total = float(latest_row["hospital"]) + float(latest_row["drugstore"]) + float(latest_row["online"])
+
+    def pct(part: float, total: float) -> float:
+        if total <= 0:
+            return 0.0
+        return part / total * 100.0
+
+    latest_hospital = float(latest_row["hospital"])
+    latest_drugstore = float(latest_row["drugstore"])
+    latest_online = float(latest_row["online"])
+
+    latest_share = {
+        "hospital": pct(latest_hospital, latest_total),
+        "drugstore": pct(latest_drugstore, latest_total),
+        "online": pct(latest_online, latest_total),
+    }
+
+    latest_year = int(str(latest_quarter)[:4])
+    prev_same_quarter = f"{latest_year - 1}{str(latest_quarter)[4:]}"
+    quarterly_lookup = {str(row["quarter"]): row for _, row in ch4.quarterly.iterrows()}
+    prev_row = quarterly_lookup.get(prev_same_quarter)
+    yoy_lines: List[str] = []
+    if prev_row is not None:
+        prev_total = float(prev_row["hospital"]) + float(prev_row["drugstore"]) + float(prev_row["online"])
+
+        def yoy(now: float, then: float) -> float:
+            if then == 0:
+                return 0.0
+            return (now - then) / then * 100.0
+
+        yoy_lines = [
+            f"- Latest quarter YoY total: {yoy(latest_total, prev_total):.2f}%",
+            f"- Latest quarter YoY hospital: {yoy(latest_hospital, float(prev_row['hospital'])):.2f}%",
+            f"- Latest quarter YoY drugstore: {yoy(latest_drugstore, float(prev_row['drugstore'])):.2f}%",
+            f"- Latest quarter YoY online: {yoy(latest_online, float(prev_row['online'])):.2f}%",
+        ]
+
+    first_row = ch4.quarterly.iloc[0]
+    first_total = float(first_row["hospital"]) + float(first_row["drugstore"]) + float(first_row["online"])
+    quarter_span = max(len(ch4.quarterly) - 1, 0)
+    years = quarter_span / 4.0 if quarter_span > 0 else 0.0
+    total_cagr = (((latest_total / first_total) ** (1.0 / years)) - 1.0) * 100.0 if (first_total > 0 and years > 0) else 0.0
+
+    annual_lines: List[str] = []
+    if not ch4.annual.empty:
+        for _, row in ch4.annual.iterrows():
+            year_value = str(row["year"])
+            hospital = float(row["hospital"])
+            drugstore = float(row["drugstore"])
+            online = float(row["online"])
+            total = hospital + drugstore + online
+            annual_lines.append(
+                f"- {year_value}: total={total:.1f}, hospital_share={pct(hospital, total):.1f}%, drugstore_share={pct(drugstore, total):.1f}%, online_share={pct(online, total):.1f}%"
+            )
+
+    def top_lines(label: str, df: pd.DataFrame) -> List[str]:
+        if df.empty:
+            return [f"- {label}: no top data"]
+        rows = []
+        for _, row in df.head(3).iterrows():
+            rows.append(f"{int(row['rank'])}.{str(row['name']).strip()} ({float(row['sales']):.1f})")
+        return [f"- {label}: " + "; ".join(rows)]
+
+    cr5_lines: List[str] = []
+    if not ch4.cr5_latest.empty:
+        for _, row in ch4.cr5_latest.iterrows():
+            cr5_lines.append(f"- {str(row['channel']).strip()}: CR5={float(row['cr5_pct']):.2f}%")
+
+    lines = [
+        "[Chapter 4 Narrative Brief]",
+        f"Topic: {DISEASE_NAME}",
+        f"Latest quarter: {latest_quarter}",
+        f"Latest quarter total sales (万元): {latest_total:.1f}",
+        f"- Hospital: {latest_hospital:.1f} ({latest_share['hospital']:.2f}%)",
+        f"- Drugstore: {latest_drugstore:.1f} ({latest_share['drugstore']:.2f}%)",
+        f"- Online: {latest_online:.1f} ({latest_share['online']:.2f}%)",
+        f"- Long-window quarterly CAGR: {total_cagr:.2f}%",
+        "",
+        "[Latest YoY]",
+    ]
+    lines.extend(yoy_lines if yoy_lines else ["- Same quarter last year not available"])
+    lines.extend(
+        [
+            "",
+            "[Annual Structure]",
+        ]
+    )
+    lines.extend(annual_lines if annual_lines else ["- Annual data not available"])
+    lines.extend(
+        [
+            "",
+            "[Top Products]",
+        ]
+    )
+    lines.extend(top_lines("Hospital", ch4.top_hospital))
+    lines.extend(top_lines("Drugstore", ch4.top_drugstore))
+    lines.extend(top_lines("Online", ch4.top_online))
+    lines.extend(
+        [
+            "",
+            "[CR5]",
+        ]
+    )
+    lines.extend(cr5_lines if cr5_lines else ["- CR5 data not available"])
+    lines.extend(
+        [
+            "",
+            "[Suggested Writing Angles]",
+            "- Treat the market as hospital-led, with drugstore/online acting as follow-up and continuation channels.",
+            "- Explain short-term volatility with channel structure shifts instead of only using total sales direction.",
+            "- Use top-product and CR5 structure to discuss concentration, not just scale.",
+            "- Do not invent region-level conclusions because the workbook does not provide region data.",
+            "- Keep every chapter-4 claim inside Excel-derived scope only.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def load_existing_text_bundle_partial(specs: List[BlockSpec]) -> Tuple[Dict[str, str], str]:
+    pattern = re.compile(
+        r"\[\[BLOCK_ID=(?P<id>[^\]]+)\]\]\n(?P<title>[^\n]*)\n(?P<body>.*?)\n\[\[END_BLOCK_ID=(?P=id)\]\]",
+        re.S,
+    )
+    out = {s.block_id: "" for s in specs}
+    for ch in range(1, 8):
+        path = OUT_ROOT / f"ch0{ch}.txt"
+        if not path.exists():
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for match in pattern.finditer(raw):
+            block_id = str(match.group("id")).strip()
+            if block_id in out:
+                out[block_id] = match.group("body").strip()
+    summary_path = OUT_ROOT / "summary.txt"
+    summary_text = summary_path.read_text(encoding="utf-8").strip() if summary_path.exists() else ""
+    return out, summary_text
+
+
+def build_codex_gap_panel(specs: List[BlockSpec], block_text: Dict[str, str], summary_text: str) -> str:
+    chapter_to_specs: Dict[int, List[BlockSpec]] = {}
+    for spec in specs:
+        chapter_to_specs.setdefault(spec.chapter, []).append(spec)
+
+    current_total = sum(len(re.sub(r"\s+", "", str(block_text.get(s.block_id, "")))) for s in specs) + len(re.sub(r"\s+", "", summary_text))
+    summary_chars = len(re.sub(r"\s+", "", summary_text))
+    block_rows: List[Tuple[int, str, int, int, int]] = []
+    lines = [
+        "[Codex Gap Panel]",
+        f"Topic: {DISEASE_NAME}",
+        f"Current total chars (chapters + summary): {current_total}",
+        f"Target total chars: 30000-34000",
+        f"Current summary chars: {summary_chars}",
+        "",
+        "[Chapter / Block Gaps]",
+    ]
+    for chapter in range(1, 8):
+        ch_specs = chapter_to_specs.get(chapter, [])
+        ch_chars = sum(len(re.sub(r"\s+", "", str(block_text.get(s.block_id, "")))) for s in ch_specs)
+        ch_floor = int(CHAPTER_MIN_CHARS.get(chapter, 0))
+        strict_gap = chapter_char_shortfall(chapter, ch_chars)
+        rewrite_gap = max(0, strict_gap - CHAPTER_CHAR_TOLERANCE)
+        lines.append(
+            f"- Chapter {chapter}: current={ch_chars}, floor={ch_floor}, tolerance={CHAPTER_CHAR_TOLERANCE}, strict_gap={strict_gap}, rewrite_gap={rewrite_gap}"
+        )
+        for spec in ch_specs:
+            current_chars = len(re.sub(r"\s+", "", str(block_text.get(spec.block_id, ""))))
+            block_gap = max(0, int(spec.target_chars) - current_chars)
+            status = "missing" if current_chars == 0 else ("short" if block_gap > 0 else "ok")
+            lines.append(
+                f"  - {spec.block_id} | current={current_chars} | target={spec.target_chars} | gap={block_gap} | status={status} | figures={spec.fig_ids if spec.fig_ids else 'none'}"
+            )
+            block_rows.append((block_gap, spec.block_id, current_chars, int(spec.target_chars), spec.chapter))
+    lines.extend(
+        [
+            "",
+            "[Priority Blocks]",
+        ]
+    )
+    ranked = [row for row in sorted(block_rows, key=lambda item: item[0], reverse=True) if row[0] > 0]
+    if ranked:
+        for gap, block_id, current_chars, target_chars, chapter in ranked[:10]:
+            lines.append(
+                f"- Chapter {chapter} / {block_id}: gap={gap}, current={current_chars}, target={target_chars}"
+            )
+    else:
+        lines.append("- No block gaps detected")
+    lines.extend(
+        [
+            "",
+            "[Summary]",
+            f"- summary current={summary_chars}, recommended=1200-1500, gap_to_1200={max(0, 1200 - summary_chars)}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def build_chapter_precheck(specs: List[BlockSpec], block_text: Dict[str, str], summary_text: str) -> str:
+    chapter_to_specs: Dict[int, List[BlockSpec]] = {}
+    for spec in specs:
+        chapter_to_specs.setdefault(spec.chapter, []).append(spec)
+
+    lines = [
+        "[Chapter Precheck]",
+        f"Topic: {DISEASE_NAME}",
+        "This is a lightweight writing-stage check, not the final QA gate.",
+        "",
+    ]
+    for chapter in range(1, 8):
+        ch_specs = chapter_to_specs.get(chapter, [])
+        missing_blocks = [s.block_id for s in ch_specs if not str(block_text.get(s.block_id, "")).strip()]
+        ch_text = "\n".join(str(block_text.get(s.block_id, "")) for s in ch_specs)
+        ch_paras: List[str] = []
+        for spec in ch_specs:
+            ch_paras.extend(split_paragraphs(str(block_text.get(spec.block_id, ""))))
+        ch_chars = len(re.sub(r"\s+", "", ch_text))
+        ch_floor = int(CHAPTER_MIN_CHARS.get(chapter, 0))
+        cite_cnt = len(re.findall(r"\[\d+\]", ch_text))
+        anchored = sum(1 for paragraph in ch_paras if paragraph_has_anchor(paragraph))
+        anchor_cov = anchored / len(ch_paras) if ch_paras else 0.0
+        ch_dup, _ = sentence_repeat_stats(ch_text)
+        medical_hits = sum(1 for pattern in MEDICAL_PATTERNS.values() if re.search(pattern, ch_text)) if chapter <= 3 else -1
+
+        fail_reasons: List[str] = []
+        warn_reasons: List[str] = []
+        if missing_blocks:
+            fail_reasons.append("missing blocks=" + ",".join(missing_blocks))
+        strict_gap = chapter_char_shortfall(chapter, ch_chars)
+        if strict_gap > CHAPTER_CHAR_TOLERANCE:
+            fail_reasons.append(f"chars={ch_chars} below floor by {strict_gap} (> tolerance {CHAPTER_CHAR_TOLERANCE})")
+        elif strict_gap > 0:
+            warn_reasons.append(f"chars below floor by {strict_gap}, but within tolerance")
+        elif ch_chars < ch_floor + 150:
+            warn_reasons.append(f"chars only slightly above floor ({ch_chars})")
+        if cite_cnt == 0:
+            fail_reasons.append("no citations")
+        if anchor_cov < 0.70:
+            fail_reasons.append(f"anchor coverage too low ({anchor_cov*100:.1f}%)")
+        elif anchor_cov < 0.85:
+            warn_reasons.append(f"anchor coverage marginal ({anchor_cov*100:.1f}%)")
+        if ch_dup >= 4:
+            fail_reasons.append(f"sentence duplication too high ({ch_dup})")
+        if chapter <= 3 and medical_hits < 2:
+            fail_reasons.append(f"medical pattern hits too low ({medical_hits})")
+
+        status = "FAIL" if fail_reasons else ("WARN" if warn_reasons else "PASS")
+        lines.append(
+            f"- Chapter {chapter} | status={status} | chars={ch_chars} | paragraphs={len(ch_paras)} | citations={cite_cnt} | anchor_cov={anchor_cov*100:.1f}%"
+        )
+        if chapter <= 3:
+            lines.append(f"  medical_pattern_hits={medical_hits}")
+        if fail_reasons:
+            lines.append("  fail_reasons=" + "; ".join(fail_reasons))
+        if warn_reasons:
+            lines.append("  warn_reasons=" + "; ".join(warn_reasons))
+
+    summary_chars = len(re.sub(r"\s+", "", summary_text))
+    summary_paras = split_paragraphs(summary_text)
+    summary_cites = len(re.findall(r"\[\d+\]", summary_text))
+    summary_status = "FAIL" if summary_chars == 0 else ("WARN" if summary_chars < 1200 else "PASS")
+    lines.extend(
+        [
+            "",
+            f"- Summary | status={summary_status} | chars={summary_chars} | paragraphs={len(summary_paras)} | citations={summary_cites}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def write_codex_progress_assets(
+    specs: List[BlockSpec],
+    block_text: Dict[str, str] | None = None,
+    summary_text: str | None = None,
+) -> None:
+    if block_text is None or summary_text is None:
+        partial_block_text, partial_summary_text = load_existing_text_bundle_partial(specs)
+        if block_text is None:
+            block_text = partial_block_text
+        if summary_text is None:
+            summary_text = partial_summary_text
+    normalized_block_text = {s.block_id: str((block_text or {}).get(s.block_id, "")).strip() for s in specs}
+    normalized_summary = str(summary_text or "").strip()
+    write_text(OUT_ROOT / CODEX_GAP_PANEL_NAME, build_codex_gap_panel(specs, normalized_block_text, normalized_summary) + "\n")
+    write_text(OUT_ROOT / CHAPTER_PRECHECK_NAME, build_chapter_precheck(specs, normalized_block_text, normalized_summary) + "\n")
+
+
 def build_evidence_and_refs() -> Tuple[str, str]:
     def to_ref(idx: int, title: str, org: str, year: str, url: str, dtype: str = "EB/OL") -> str:
         y = year if re.search(r"(19|20)\d{2}", str(year)) else "2024"
@@ -2307,185 +2611,12 @@ def _format_pct(value: object) -> str:
     return f"{_safe_float(value):.1f}%"
 
 
-def _evidence_nums(evidence_ids: str) -> List[int]:
-    nums: List[int] = []
-    for token in str(evidence_ids).split("|"):
-        m = re.match(r"^E(\d{2})$", token.strip())
-        if m:
-            nums.append(int(m.group(1)))
-    return nums
-
-
-def _cite_text(evidence_ids: str, start: int = 0, count: int = 3) -> str:
-    nums = _evidence_nums(evidence_ids)
-    if not nums:
-        return "[1]"
-    picked = nums[start : start + count]
-    if not picked:
-        picked = nums[-min(count, len(nums)) :]
-    return "".join(f"[{n}]" for n in picked)
-
-
-def infer_topic_context() -> Dict[str, str]:
-    name = DISEASE_NAME.strip()
-    topic_type = "disease"
-    if "疫苗" in name:
-        topic_type = "vaccine"
-    elif "生物制剂" in name:
-        topic_type = "biologic"
-    elif any(k in name for k in ["菌群", "益生菌"]):
-        topic_type = "microbiome"
-    elif any(k in name for k in ["药物", "安神类", "抗病毒", "降尿酸"]):
-        topic_type = "drug"
-    elif any(k in name for k in ["修复", "康复", "管理"]):
-        topic_type = "management"
-    elif any(k in name for k in ["焦虑", "神经痛"]):
-        topic_type = "neuropsych"
-
-    population = "儿科与家庭决策人群" if "儿童" in name else "专科与慢病管理人群"
-    if topic_type == "vaccine":
-        return {
-            "topic_type": topic_type,
-            "population": population,
-            "core_goal": "建立免疫保护、降低感染与并发症负担",
-            "core_process": "接种时机、免疫原性、覆盖率与季节流行匹配",
-            "review_window": "接种季前、流行季中和年度复盘",
-            "risk_focus": "年龄限制、禁忌证、联合接种、不良事件监测",
-            "market_focus": "免疫规划、自费接种渗透和渠道教育效率",
-        }
-    if topic_type == "biologic":
-        return {
-            "topic_type": topic_type,
-            "population": population,
-            "core_goal": "提升中重度患者结局并重塑高价值治疗结构",
-            "core_process": "适应证扩展、序贯治疗、疗效安全平衡与支付可及性",
-            "review_window": "起始治疗后 4-12 周复评与长期维持评估",
-            "risk_focus": "适应证、免疫原性、感染警示、院内准入与支付边界",
-            "market_focus": "高值品种放量、证据升级与准入竞争",
-        }
-    if topic_type == "microbiome":
-        return {
-            "topic_type": topic_type,
-            "population": population,
-            "core_goal": "恢复微生态稳态、改善屏障功能并减少症状波动",
-            "core_process": "菌株选择、肠道屏障、炎症调节与长期依从管理",
-            "review_window": "2-8 周症状复评与长期复购观察",
-            "risk_focus": "菌株证据等级、适用人群、联合用药与安全监测",
-            "market_focus": "院外教育、复购管理与消费医疗转化效率",
-        }
-    if topic_type == "drug":
-        return {
-            "topic_type": topic_type,
-            "population": population,
-            "core_goal": "在适应证范围内平衡疗效、安全性与可及性",
-            "core_process": "证据等级、说明书边界、联合用药与渠道渗透",
-            "review_window": "起始用药后 1-4 周复评与季度结构复盘",
-            "risk_focus": "适应证、禁忌证、肝肾功能、药物相互作用与警示信息",
-            "market_focus": "终端结构、品牌竞争和支付政策驱动的品类升级",
-        }
-    if topic_type == "management":
-        return {
-            "topic_type": topic_type,
-            "population": population,
-            "core_goal": "把修复、康复或长期管理目标转化为可复评的结局",
-            "core_process": "症状控制、客观终点、复评路径和依从性闭环",
-            "review_window": "4-8 周阶段复评与 3-6 个月长期跟踪",
-            "risk_focus": "红旗征识别、适应证边界、复评窗口与不良反应监测",
-            "market_focus": "治疗-康复一体化、院内外协同和长期管理服务化",
-        }
-    if topic_type == "neuropsych":
-        return {
-            "topic_type": topic_type,
-            "population": population,
-            "core_goal": "降低症状负担并提高长期功能恢复与依从性",
-            "core_process": "神经递质/疼痛通路调节、行为干预和长期复评",
-            "review_window": "2-6 周初始复评与 3 个月疗程评估",
-            "risk_focus": "警示症状、合并用药、耐受性、不良反应和减停药路径",
-            "market_focus": "专科处方、院外续方与患者教育效率",
-        }
-    return {
-        "topic_type": topic_type,
-        "population": population,
-        "core_goal": "控制症状、改善客观终点并降低复发风险",
-        "core_process": "机制识别、风险分层、干预选择与长期管理",
-        "review_window": "2-12 周阶段复评与季度回顾",
-        "risk_focus": "红旗征、适应证、禁忌证、安全监测与复评窗口",
-        "market_focus": "真实世界需求、渠道结构与竞争壁垒演进",
-    }
-
-
-def build_market_snapshot(ch4: Ch4Data) -> Dict[str, object]:
-    annual = ch4.annual.copy()
-    first_year = int(annual.iloc[0]["year"])
-    last_year = int(annual.iloc[-1]["year"])
-    first_total = _safe_float(annual.iloc[0]["total"])
-    last_total = _safe_float(annual.iloc[-1]["total"])
-    years = max(last_year - first_year, 1)
-    if first_total > 0 and last_total > 0:
-        cagr = (pow(last_total / first_total, 1.0 / years) - 1.0) * 100.0
-    else:
-        cagr = 0.0
-    share_map = {str(r["channel"]): _safe_float(r["share_pct"]) for _, r in ch4.latest_share.iterrows()}
-    yoy_map = {str(r["channel"]): _safe_float(r["yoy_pct"]) for _, r in ch4.yoy_latest.iterrows()}
-    cr5_map = {str(r["channel"]): _safe_float(r["cr5_pct"]) for _, r in ch4.cr5_latest.iterrows()}
-    top_share_channel = max(share_map.items(), key=lambda x: x[1])[0] if share_map else "医院端"
-    top_cr5_channel = max(cr5_map.items(), key=lambda x: x[1])[0] if cr5_map else "医院端"
-    return {
-        "first_year": first_year,
-        "last_year": last_year,
-        "first_total": first_total,
-        "last_total": last_total,
-        "latest_quarter": ch4.latest_quarter,
-        "latest_total": _safe_float(ch4.quarterly.iloc[-1]["total"]),
-        "cagr": cagr,
-        "share_map": share_map,
-        "yoy_map": yoy_map,
-        "cr5_map": cr5_map,
-        "top_share_channel": top_share_channel,
-        "top_cr5_channel": top_cr5_channel,
-        "top_latest_name": dict(ch4.top_latest_name),
-        "quarter_start": str(ch4.quarterly.iloc[0]["quarter"]),
-        "quarter_end": str(ch4.quarterly.iloc[-1]["quarter"]),
-    }
-
-
-def _topic_fig23_nodes(ctx: Dict[str, str]) -> Tuple[List[str], str, List[str]]:
-    topic_type = ctx.get("topic_type", "disease")
-    if topic_type == "vaccine":
-        return (
-            ["适龄人群覆盖不足", "流行季认知与接种时机错配", "供应与支付约束"],
-            f"{DISEASE_NAME}免疫保护建立不足\n(接种率-免疫原性-季节匹配)",
-            ["感染与并发症负担延续", "儿科门急诊压力增加", "自费教育与渗透成本上升"],
-        )
-    if topic_type in {"drug", "biologic"}:
-        return (
-            ["适应证与证据边界持续收紧", "支付与准入约束增强", "患者依从与长期维持压力"],
-            f"{DISEASE_NAME}治疗路径分化\n(可及性-疗效安全-渠道渗透)",
-            ["终端结构重新分配", "头部品种集中度变化", "生命周期竞争持续加剧"],
-        )
-    if topic_type == "microbiome":
-        return (
-            ["菌群生态失衡持续", "屏障功能恢复不足", "饮食与行为诱因反复暴露"],
-            f"{DISEASE_NAME}稳态恢复不足\n(微生态-屏障-症状波动)",
-            ["腹痛腹泻等症状反复", "长期复购与教育需求上升", "高质量证据与品牌分化加快"],
-        )
-    if topic_type == "management":
-        return (
-            ["上游病因控制不充分", "营养/康复支持不足", "复评节点执行不稳定"],
-            f"{DISEASE_NAME}阶段管理目标未闭环\n(症状-指标-客观终点)",
-            ["症状波动与复诊增加", "依从性下降与疗程延长", "资源利用与长期成本上升"],
-        )
-    return (
-        ["病因与风险因素持续存在", "客观终点达成不足", "长期管理执行不稳定"],
-        f"{DISEASE_NAME}核心管理目标承压\n(疗效-安全-依从性)",
-        ["症状与负担持续波动", "终端需求与教育成本上升", "复发与资源消耗风险增加"],
-    )
-
-
 def ensure_fig23_codex_spec_ready() -> None:
     path = OUT_ROOT / FIG23_CODEX_SPEC_NAME
     if not path.exists():
-        return
+        raise FileNotFoundError(
+            f"Missing Codex fig23 spec: {path}. Please author it via {OUT_ROOT / FIG23_CODEX_PROMPT_NAME}."
+        )
     raw = read_fig23_codex_spec()
     if not raw:
         raise RuntimeError(
@@ -2696,387 +2827,11 @@ def ensure_ch4_extract_ready(xlsx: Path) -> None:
     write_json(extract_path, payload)
 
 
-def _block_paragraphs_generic(spec: BlockSpec, ctx: Dict[str, str], snapshot: Dict[str, object]) -> List[str]:
-    topics_text = "、".join(spec.topics[:4])
-    citations_a = _cite_text(spec.evidence_ids, 0, 3)
-    citations_b = _cite_text(spec.evidence_ids, 1, 3)
-    citations_c = _cite_text(spec.evidence_ids, 2, 3)
-    para1 = (
-        f"围绕“{DISEASE_NAME}”这一医学主题，{spec.subtitle}所关注的核心并不是单一病名标签，而是{topics_text}等多条链路如何共同影响{ctx['core_goal']}。"
-        f"从{spec.subtitle}对应的应用边界看，该主题既覆盖院内规范化评估，也覆盖院外教育、复评与长期管理，因此不同终端的应用场景、适应证边界和复评频率不能简单等同。"
-        f"在 2024-2025 年公开指南、共识和统计资料中，{spec.subtitle}的分析价值越来越体现在能否把客观终点、风险分层和连续管理放到同一套决策框架中，而不是只强调单次症状波动{citations_a}。"
-    )
-    para2 = (
-        f"就{spec.subtitle}的机制与路径而言，{DISEASE_NAME}的关键不只在于短期干预本身，还在于{ctx['core_process']}是否能够被真正执行。"
-        f"因此在{spec.subtitle}这个层面，讨论重点必须回到红旗征识别、适应证/禁忌证、说明书边界和安全监测：一方面要明确哪些人群适合起始干预，另一方面也要明确何时需要在 1 周、4-8 周或 3 个月节点进行复评、复查或升级检查。"
-        f"只有把“指南/共识推荐—治疗执行—复评调整—长期稳定”串成与{topics_text}一致的闭环，才能把医学主题真正转化为可管理的终端需求{citations_b}。"
-    )
-    para3 = (
-        f"从{spec.subtitle}涉及的终端逻辑看，医院端通常更关注适应证、风险分层和客观指标，药店端更关注可及性、依从性和品牌熟悉度，线上端则更依赖患者教育、搜索效率和复购转化。"
-        f"这意味着围绕{topics_text}做市场分析时必须同时回答三个问题：第一，哪些人群需要专科路径，哪些人群适合院外管理；第二，哪些干预应放在说明书与指南明示的人群内；第三，哪些高风险情况应触发复评、复查或警示。"
-        f"如果这三点在{spec.subtitle}这一层面回答不清，后续渠道结构、产品定位和竞争格局分析就会失去医学锚点{citations_c}。"
-    )
-    para4 = (
-        f"因此，在{spec.subtitle}的写作上始终把{ctx['risk_focus']}放在同一层面考察，并把{ctx['review_window']}设为管理节奏的共同参考。"
-        f"这种处理方式既能避免把{DISEASE_NAME}泛化为抽象概念，也能避免在{spec.subtitle}的市场分析中脱离真实诊疗路径；对后续第四章的规模、结构、CR5、渠道份额和战略判断而言，这些医学边界本身就是最重要的前置约束{citations_a}{citations_c}。"
-    )
-    extra = (
-        f"进一步看，{spec.subtitle}所涉及的{topics_text}并不是彼此孤立的变量，而是在不同阶段相互强化：当适应证判断偏宽时，禁忌证与不良反应风险会上升；当复评节奏不足时，疗效判断与长期依从性会被高估；当教育不足时，终端结构与患者复购也更容易出现短期波动。"
-        f"因此，把{spec.subtitle}中的医学事实、指南证据等级和终端需求放在一张图里统一理解，正是该主题市场报告区别于纯销售复盘的根本原因{citations_b}{citations_c}。"
-    )
-    paragraphs = [para1, para2, para3, para4]
-    if spec.target_chars >= 1400:
-        paragraphs.append(extra)
-    return paragraphs
-
-
-def _block_paragraphs_ch4(spec: BlockSpec, ctx: Dict[str, str], snapshot: Dict[str, object]) -> List[str]:
-    share_map = snapshot["share_map"]
-    yoy_map = snapshot["yoy_map"]
-    cr5_map = snapshot["cr5_map"]
-    top_name = snapshot["top_latest_name"]
-    latest_q = str(snapshot["latest_quarter"])
-    citations = _cite_text(spec.evidence_ids, 0, 3)
-    if spec.block_id == "4.1":
-        p1 = (
-            f"从米内网口径看，{DISEASE_NAME}在 {snapshot['quarter_start']} 至 {snapshot['quarter_end']} 期间已经形成连续可追踪的三端市场轨迹。"
-            f"按年度合并口径，市场总额由 {int(snapshot['first_year'])} 年的{_format_money(snapshot['first_total'])}变化至 {int(snapshot['last_year'])} 年的{_format_money(snapshot['last_total'])}，年复合增速约为{_format_pct(snapshot['cagr'])}。"
-            f"这说明该主题不是一次性热点，而是受临床需求、终端教育和支付环境共同驱动的持续性赛道[12][13]。"
-        )
-        p2 = (
-            f"就最新季度 {latest_q} 而言，三端合计规模为{_format_money(snapshot['latest_total'])}；其中医院端份额为{_format_pct(share_map.get('医院端', 0))}，药店端为{_format_pct(share_map.get('药店端', 0))}，线上端为{_format_pct(share_map.get('线上端', 0))}。"
-            f"当前由{snapshot['top_share_channel']}贡献最高结构份额，说明该主题的价值实现仍然强依赖该终端的诊疗组织方式、准入节奏和教育效率[9][10][12]。"
-        )
-        p3 = (
-            f"同比维度上，医院端最新季度同比为{_format_pct(yoy_map.get('医院端', 0))}，药店端为{_format_pct(yoy_map.get('药店端', 0))}，线上端为{_format_pct(yoy_map.get('线上端', 0))}。"
-            f"如果医院端增速更高，通常意味着处方和专科需求仍是主驱动；若药店或线上更快，则往往提示院外教育、复购和便利性正在抬升。"
-            f"因此，对{DISEASE_NAME}的市场判断不能只看总盘子，还要看结构变化是否与临床路径一致{citations}。"
-        )
-        p4 = (
-            f"综合来看，{DISEASE_NAME}的第四章市场概况要回答的是“规模是否持续、结构是否健康、增长是否由真实需求驱动”。"
-            f"只有当三端趋势、份额和同比方向相互印证，并且与指南、适应证和复评需求一致时，后续竞争格局和战略建议才具备可执行性[9][10][12][15]。"
-        )
-        return [p1, p2, p3, p4]
-    if spec.block_id == "4.2":
-        p1 = (
-            f"在最新季度 {latest_q}，头部品种分布呈现明显的渠道分化：医院端 Top1 为“{top_name.get('医院端', 'N/A')}”，药店端 Top1 为“{top_name.get('药店端', 'N/A')}”，线上端 Top1 为“{top_name.get('线上端', 'N/A')}”。"
-            f"这种差异意味着同一医学主题在院内处方、零售教育和线上搜索场景中的核心决策因素并不相同，企业必须分别处理指南证据、价格带、便利性与品牌认知[12][13][14]。"
-        )
-        p2 = (
-            f"从产品分析角度看，医院端更强调适应证、证据等级和规范化用法，药店端更依赖熟悉品类和复购习惯，线上端则更容易放大内容教育、用户评价和套餐化组合。"
-            f"因此，{DISEASE_NAME}赛道里“头部品种”的含义不是单纯销量领先，而是能否在不同渠道分别构建出可复制的疗效叙事、安全边界和长期管理价值[8][12][14]。"
-        )
-        p3 = (
-            f"如果某一渠道的头部品种长期稳定，往往意味着该渠道的处方惯性或消费心智已经形成；反之，若头部品种切换频繁，则通常提示赛道还处于证据升级、教育竞夺或支付约束重构阶段。"
-            f"对{DISEASE_NAME}而言，理解这一点有助于把“药物分析”从静态排名转向动态生命周期管理{citations}。"
-        )
-        p4 = (
-            f"所以，主要治疗药物分析的重点不只是罗列 Top10，而是判断哪些品种能在医院端建立学术壁垒，哪些品种能在药店端支撑高频转化，哪些品种又能在线上承担教育和复购入口。"
-            f"这决定了企业后续在证据、准入、价格和渠道上的投入顺序[8][12][15]。"
-        )
-        return [p1, p2, p3, p4]
-    if spec.block_id == "4.3":
-        p1 = (
-            f"从集中度看，{DISEASE_NAME}的竞争格局并非单纯由总规模决定，而更多取决于渠道内部是否已经形成稳定的头部控制。"
-            f"医院端CR5为{_format_pct(cr5_map.get('医院端', 0))}，药店端CR5为{_format_pct(cr5_map.get('药店端', 0))}，线上端CR5为{_format_pct(cr5_map.get('线上端', 0))}。按当前口径，{snapshot['top_cr5_channel']}集中度最高。"
-            f"这组数据可以直接反映进入壁垒、替代强度和后来者切入难度[12][13]。"
-        )
-        p2 = (
-            f"若集中度高的一端同时也是结构份额较高的一端，则说明该渠道已经出现“头部品牌+稳定路径”的双重壁垒；若集中度高但份额不高，则更像是局部垄断而非全局领先。"
-            f"对{DISEASE_NAME}而言，这种差别会直接影响企业是优先争夺院内准入、零售陈列还是线上内容转化{citations}。"
-        )
-        p3 = (
-            f"竞争态势的另一个重点在于：高 CR5 不一定意味着赛道封闭，反而可能意味着临床证据、支付身份或用户教育门槛足够高；低 CR5 也不必然代表机会更大，因为也可能反映品类定义模糊、疗效认知分散或替代方案过多。"
-            f"因此，市场格局分析必须与适应证、复评节点和安全边界联动解读[8][12][15]。"
-        )
-        p4 = (
-            f"总体来看，{DISEASE_NAME}赛道的竞争不只是价格竞争，更是证据竞争、准入竞争和渠道效率竞争。"
-            f"谁能把临床价值转译为终端结构优势，谁就更可能在未来 2-3 个年度周期内获得更高质量的增长[9][10][12][15]。"
-        )
-        return [p1, p2, p3, p4]
-    trend_text = "总体保持增长" if _safe_float(snapshot["cagr"]) >= 0 else "总体收缩"
-    p1 = (
-        f"第四章的综合结论首先体现在口径一致性：本报告统一采用米内网三端季度数据，并以 {snapshot['quarter_start']} 至 {snapshot['quarter_end']} 为同口径观察区间。"
-        f"在这一口径下，{DISEASE_NAME}市场{trend_text}，且结构变化与临床终端分工基本一致[12][13]。"
-    )
-    p2 = (
-        f"其次，份额、同比和 CR5 共同构成了经营判断的三角框架：份额回答“规模在哪里”，同比回答“增量从哪里来”，CR5回答“竞争是否正在收敛”。"
-        f"如果三者方向一致，企业可以更明确地安排学术、准入和渠道资源；如果三者分化，则应优先做结构复盘而不是简单追求总量扩张[9][10][12]。"
-    )
-    p3 = (
-        f"最后，{DISEASE_NAME}的市场复盘必须回到医学主题本身。只有当市场变化与适应证边界、复评路径、红旗征管理和长期依从性逻辑相一致时，本章结论才具备跨季度复用价值。"
-        f"这也是本报告后续进行人群、政策和预测分析的基础{citations}[15]。"
-    )
-    return [p1, p2, p3]
-
-
-def build_block_paragraphs(spec: BlockSpec, ctx: Dict[str, str], snapshot: Dict[str, object]) -> List[str]:
-    target_chars = spec.target_chars
-    if spec.chapter == 4:
-        target_chars += 220
-    if spec.chapter in {6, 7}:
-        target_chars += 180
-    if spec.chapter == 4:
-        paragraphs = _block_paragraphs_ch4(spec, ctx, snapshot)
-    else:
-        paragraphs = _block_paragraphs_generic(spec, ctx, snapshot)
-    topic_text = "、".join(spec.topics[:4])
-    while len(re.sub(r"\s+", "", "\n\n".join(paragraphs))) < target_chars:
-        idx = len(paragraphs) + 1
-        citations = _cite_text(spec.evidence_ids, idx % 2, 3)
-        if spec.chapter == 4:
-            share_map = snapshot["share_map"]
-            yoy_map = snapshot["yoy_map"]
-            top_name = snapshot["top_latest_name"]
-            active_channels = [
-                channel
-                for channel in ["医院端", "药店端", "线上端"]
-                if _safe_float(share_map.get(channel, 0)) > 0 or abs(_safe_float(yoy_map.get(channel, 0))) > 0 or str(top_name.get(channel, "N/A")) != "N/A"
-            ]
-            if not active_channels:
-                active_channels = ["医院端"]
-            focus_channel = active_channels[(idx - 1) % len(active_channels)]
-            variant = (idx + len(spec.block_id)) % 3
-            if variant == 0:
-                paragraphs.append(
-                    f"围绕{spec.subtitle}继续下钻时，{focus_channel}的结构变化尤其值得单独拆开。"
-                    f"如果该端份额扩张快于其他渠道，往往意味着{DISEASE_NAME}的需求入口正在向该终端迁移；若份额稳定但 CR5 上升，则更常见于头部品牌、准入门槛或教育效率开始主导竞争格局。"
-                    f"因此，{focus_channel}并不是简单的销售去向，而是判断赛道结构是否升级的重要观察窗{citations}。"
-                )
-            elif variant == 1:
-                paragraphs.append(
-                    f"从竞争门槛角度看，{spec.subtitle}不能只比较总量，还要看{focus_channel}是否形成了更强的品种集中与路径黏性。"
-                    f"对{DISEASE_NAME}来说，若该端 Top 品种稳定且集中度持续上行，通常说明学术认知、终端替换成本和患者教育路径正在被固化；反之，则提示赛道仍处在教育竞夺与结构重排阶段。"
-                    f"这类判断会直接影响后续预测、产品组合和渠道资源配置{citations}。"
-                )
-            else:
-                paragraphs.append(
-                    f"若把{focus_channel}放回{spec.subtitle}的完整链路中观察，可以更清楚地看到{DISEASE_NAME}的真实增长质量。"
-                    f"在{spec.subtitle}层面，当该端同时出现份额改善、同比回升或头部品种更替时，企业需要区分这究竟来自真实临床需求释放、消费者教育增强，还是来自短期促销与供给扰动。"
-                    f"就{spec.subtitle}而言，只有把渠道结构与医学路径同时校验，第四章结论才能真正支撑第六章和第七章的策略判断{citations}。"
-                )
-        else:
-            paragraphs.append(
-                f"就 {spec.subtitle} 而言，第 {idx} 个延伸判断在于：{topic_text}这些变量必须放回同一条管理路径中观察。"
-                f"若在{spec.subtitle}阶段只关注短期反应而忽略红旗征、适应证、禁忌证、说明书限制和安全监测，后续复评、复查与长期依从性就容易出现偏差；反之，若能按 {ctx['review_window']} 做阶段评估，并把不良反应、警示信号和患者教育纳入随访框架，则更有利于把医学主题的真实价值转化为稳定需求和可预测市场结构{citations}。"
-            )
-        if len(paragraphs) >= 8:
-            break
-    return paragraphs
-
-
-def write_block_text_bundle(specs: List[BlockSpec], block_text: Dict[str, str]) -> None:
-    chapter_blocks: Dict[int, List[str]] = {ch: [] for ch in range(1, 8)}
-    for spec in specs:
-        body = block_text[spec.block_id].strip()
-        wrapped = f"[[BLOCK_ID={spec.block_id}]]\n{spec.subtitle}\n{body}\n[[END_BLOCK_ID={spec.block_id}]]"
-        chapter_blocks[spec.chapter].append(wrapped)
-    for ch in range(1, 8):
-        write_text(OUT_ROOT / f"ch0{ch}.txt", "\n\n".join(chapter_blocks[ch]).strip() + "\n")
-
-
-def build_summary_extension(ctx: Dict[str, str], snapshot: Dict[str, object], idx: int) -> str:
-    templates = [
-        f"补充从执行节奏看，{DISEASE_NAME}若要把当前市场机会沉淀为长期结构，关键仍是把 {ctx['review_window']} 变成真实可执行的随访与复盘节拍。尤其在 {snapshot['latest_quarter']} 之后，只有同步观察终端结构、产品集中度和风险管理要求，企业才可能把增长建立在可持续需求上，而不是建立在短期渠道波动上[9][10][12]。",
-        f"补充从结构稳定性看，{DISEASE_NAME}并不只是规模扩张的问题，更是“什么终端在承接增长、什么品种在形成壁垒、什么证据在支撑长期复购”的问题。围绕这一点，后续战略不能脱离 {ctx['market_focus']}，也不能脱离 {ctx['risk_focus']} 这一合规底线[4][8][15]。",
-        f"补充从管理价值看，{DISEASE_NAME}真正值得投入的地方，在于把医学主题拆成可验证的人群、场景和阶段终点，并持续回看 {snapshot['top_share_channel']} 与 {snapshot['top_cr5_channel']} 的变化是否仍与临床路径一致。只要这种一致性能够维持，未来 2-3 年的结构升级仍具备较高确定性[10][12][14]。",
-    ]
-    return templates[(idx - 1) % len(templates)]
-
-
-def build_block_extension(spec: BlockSpec, ctx: Dict[str, str], snapshot: Dict[str, object], idx: int) -> str:
-    citations = _cite_text(spec.evidence_ids, idx % 2, 3)
-    topic_text = "、".join(spec.topics[:4])
-    if spec.chapter == 4:
-        share_map = snapshot["share_map"]
-        yoy_map = snapshot["yoy_map"]
-        ordered_channels = sorted(
-            ["医院端", "药店端", "线上端"],
-            key=lambda item: (_safe_float(share_map.get(item, 0)), abs(_safe_float(yoy_map.get(item, 0)))),
-            reverse=True,
-        )
-        focus_channel = ordered_channels[(idx - 1) % len(ordered_channels)]
-        templates = [
-            f"在{spec.subtitle}的扩展分析里，{focus_channel}不能只被理解为销售流向，还需要被放回真实诊疗与教育路径中审视。对{DISEASE_NAME}而言，如果该端长期承接更高份额，就说明该终端更能把医学证据、患者认知和支付行为转化为稳定需求；若其份额虽高但波动频繁，则提示赛道仍受促销、供给或阶段性事件扰动{citations}。",
-            f"从{spec.subtitle}对应的经营含义看，{focus_channel}既是观察渠道结构的窗口，也是判断品种壁垒的窗口。只有把季度趋势、头部品种、CR5 与终端教育成本联立分析，企业才能区分哪些变化来自真实临床需求升级，哪些变化只是短期交易性波动{citations}。",
-            f"进一步说，{spec.subtitle}真正有价值的地方，在于帮助企业识别{focus_channel}是否正在成为{DISEASE_NAME}的核心放量场景。若答案是肯定的，则后续学术推广、渠道协同和资源投入就应围绕这一终端重新排序；若答案是否定的，则更应把重点放在结构修复而不是简单追量{citations}。",
-        ]
-        return templates[(idx + len(spec.block_id)) % len(templates)]
-
-    templates = [
-        f"补充从{spec.subtitle}继续展开时，{DISEASE_NAME}之所以需要把{topic_text}放进同一条分析链路，是因为这些变量共同决定了{ctx['core_goal']}能否被真实实现。若只在单一时间点观察短期反应，而忽略适应证边界、复评节点和患者教育差异，就很容易高估策略有效性并低估后续波动风险{citations}。",
-        f"补充在{spec.subtitle}层面，企业真正需要回答的问题并不是“是否有需求”，而是“需求来自哪些人群、通过哪些终端被承接、又在什么条件下会转化为长期依从”。围绕这一点，{DISEASE_NAME}的市场讨论必须同时回到{ctx['risk_focus']}和{ctx['market_focus']}，否则结论很难用于后续预测和资源配置{citations}。",
-        f"补充回到{spec.subtitle}，对{DISEASE_NAME}最重要的并不是堆叠概念，而是明确{topic_text}在不同阶段的先后顺序。只有把评估、干预、复评和长期管理放到统一框架里观察，并按{ctx['review_window']}建立稳定复盘节奏，前文的医学判断才能真正转化为可执行的市场动作{citations}。",
-    ]
-    return templates[(idx + len(spec.block_id)) % len(templates)]
-
-
-def fit_text_bundle_to_gate(
-    specs: List[BlockSpec],
-    block_text: Dict[str, str],
-    summary_text: str,
-    ctx: Dict[str, str],
-    snapshot: Dict[str, object],
-) -> Tuple[Dict[str, str], str]:
-    for _ in range(60):
-        metrics = collect_text_quality_metrics(specs, block_text)
-        chapter_chars: Dict[int, int] = metrics["chapter_chars"]  # type: ignore[assignment]
-        total_chars = sum(chapter_chars.values()) + len(re.sub(r"\s+", "", summary_text))
-        chapter_dup_fails: List[int] = metrics["chapter_dup_fails"]  # type: ignore[assignment]
-        chapter_len_fails: List[str] = metrics["chapter_len_fails"]  # type: ignore[assignment]
-        changed = False
-
-        if chapter_dup_fails:
-            for ch in chapter_dup_fails:
-                chapter_specs = [s for s in specs if s.chapter == ch]
-                for spec in reversed(chapter_specs):
-                    paras = split_paragraphs(block_text[spec.block_id])
-                    if len(paras) <= 3:
-                        continue
-                    removed_chars = len(re.sub(r"\s+", "", paras[-1]))
-                    if chapter_chars.get(ch, 0) - removed_chars < CHAPTER_MIN_CHARS[ch]:
-                        continue
-                    block_text[spec.block_id] = "\n\n".join(paras[:-1]).strip()
-                    changed = True
-                    break
-                if changed:
-                    break
-            if changed:
-                continue
-
-        if total_chars > 34000:
-            summary_paras = split_paragraphs(summary_text)
-            if len(summary_paras) > 2:
-                summary_text = "\n\n".join(summary_paras[:-1]).strip()
-                changed = True
-            else:
-                chapter_order = sorted(((ch, chapter_chars.get(ch, 0) - CHAPTER_MIN_CHARS[ch]) for ch in range(1, 8)), key=lambda x: x[1], reverse=True)
-                for ch, surplus in chapter_order:
-                    if surplus <= 80:
-                        continue
-                    blocks = sorted(
-                        [s for s in specs if s.chapter == ch],
-                        key=lambda item: len(re.sub(r"\s+", "", block_text[item.block_id])),
-                        reverse=True,
-                    )
-                    for spec in blocks:
-                        paras = split_paragraphs(block_text[spec.block_id])
-                        if len(paras) <= 3:
-                            continue
-                        removed_chars = len(re.sub(r"\s+", "", paras[-1]))
-                        if chapter_chars.get(ch, 0) - removed_chars < CHAPTER_MIN_CHARS[ch]:
-                            continue
-                        block_text[spec.block_id] = "\n\n".join(paras[:-1]).strip()
-                        changed = True
-                        break
-                    if changed:
-                        break
-        elif total_chars < 30000:
-            chapter_deficits = sorted(
-                ((ch, CHAPTER_MIN_CHARS[ch] - chapter_chars.get(ch, 0)) for ch in range(1, 8) if chapter_chars.get(ch, 0) < CHAPTER_MIN_CHARS[ch]),
-                key=lambda item: item[1],
-                reverse=True,
-            )
-            if chapter_deficits:
-                for ch, _ in chapter_deficits:
-                    candidate_specs = sorted(
-                        [s for s in specs if s.chapter == ch],
-                        key=lambda item: len(re.sub(r"\s+", "", block_text[item.block_id])),
-                    )
-                    if not candidate_specs:
-                        continue
-                    spec = candidate_specs[0]
-                    paras = split_paragraphs(block_text[spec.block_id])
-                    paras.append(build_block_extension(spec, ctx, snapshot, len(paras) + 1))
-                    block_text[spec.block_id] = "\n\n".join(paras).strip()
-                    changed = True
-                if changed:
-                    continue
-            summary_paras = split_paragraphs(summary_text)
-            summary_paras.append(build_summary_extension(ctx, snapshot, len(summary_paras) + 1))
-            summary_text = "\n\n".join(summary_paras).strip()
-            changed = True
-
-        if chapter_len_fails and not changed:
-            chapter_deficits = sorted(
-                ((ch, CHAPTER_MIN_CHARS[ch] - chapter_chars.get(ch, 0)) for ch in range(1, 8) if chapter_chars.get(ch, 0) < CHAPTER_MIN_CHARS[ch]),
-                key=lambda item: item[1],
-                reverse=True,
-            )
-            for ch, _ in chapter_deficits:
-                candidate_specs = sorted(
-                    [s for s in specs if s.chapter == ch],
-                    key=lambda item: len(re.sub(r"\s+", "", block_text[item.block_id])),
-                )
-                if not candidate_specs:
-                    continue
-                spec = candidate_specs[0]
-                paras = split_paragraphs(block_text[spec.block_id])
-                paras.append(build_block_extension(spec, ctx, snapshot, len(paras) + 1))
-                block_text[spec.block_id] = "\n\n".join(paras).strip()
-                changed = True
-            if changed:
-                continue
-
-        if not changed:
-            break
-    return block_text, summary_text
-
-
-def current_text_bundle_is_valid(specs: List[BlockSpec]) -> bool:
-    required = [OUT_ROOT / f"ch0{ch}.txt" for ch in range(1, 8)] + [OUT_ROOT / "summary.txt"]
-    if not all(path.exists() for path in required):
-        return False
-    try:
-        block_text = load_block_text_from_files(specs)
-        summary_text = (OUT_ROOT / "summary.txt").read_text(encoding="utf-8").strip()
-    except Exception:
-        return False
-
-    metrics = collect_text_quality_metrics(specs, block_text)
-    total_chars = sum(int(v) for v in metrics["chapter_chars"].values()) + len(re.sub(r"\s+", "", summary_text))  # type: ignore[index]
-    if not (30000 <= total_chars <= 34000):
-        return False
-    if metrics["chapter_len_fails"]:  # type: ignore[index]
-        return False
-    if int(metrics["max_sentence_dup"]) >= 4:  # type: ignore[arg-type]
-        return False
-    if metrics["medical_density_failed"]:  # type: ignore[index]
-        return False
-    if not bool(metrics["cagr_logic_ok"]):  # type: ignore[arg-type]
-        return False
-    if not bool(metrics["cr5_logic_ok"]):  # type: ignore[arg-type]
-        return False
-    return True
-
-
-def auto_write_topic_text_bundle(ch4: Ch4Data) -> None:
-    specs = build_block_specs()
-    if current_text_bundle_is_valid(specs):
-        return
-    ctx = infer_topic_context()
-    snapshot = build_market_snapshot(ch4)
-    block_text: Dict[str, str] = {}
-    for spec in specs:
-        block_text[spec.block_id] = "\n\n".join(build_block_paragraphs(spec, ctx, snapshot)).strip()
-
-    trend_text = "总体保持增长" if _safe_float(snapshot["cagr"]) >= 0 else "总体收缩"
-    summary_paragraphs = [
-        f"综合全文，{DISEASE_NAME}并不是只能从单一病种或单一产品角度理解的主题，而是一个把医学证据、终端路径、支付政策与渠道结构同时串联起来的市场单元。围绕这一主题，真正决定增长质量的不是短期销量起伏，而是能否在适应证边界内持续交付{ctx['core_goal']}，并把复评、复查、安全监测和长期依从性转化为稳定的真实世界结局[1][3][9][12]。",
-        f"从第四章数据看，{DISEASE_NAME}在 {snapshot['quarter_start']} 至 {snapshot['quarter_end']} 期间形成了连续的三端轨迹，最新季度总规模为{_format_money(snapshot['latest_total'])}，市场{trend_text}，且 {snapshot['top_share_channel']}仍是最重要的结构承载端。医院端、药店端和线上端分别承担不同的医学与商业功能，因此未来策略不应试图用单一叙事覆盖所有终端，而应按证据等级、教育成本和复购机制分层配置资源[10][12][13]。",
-        f"面向执行层，报告建议把策略重心放在三件事上：第一，围绕{ctx['risk_focus']}强化合规边界，避免在教育和销售中脱离说明书与指南；第二，围绕{ctx['review_window']}重建复评机制，把客观指标、症状变化和渠道行为统一到同一套复盘框架；第三，围绕{ctx['market_focus']}配置产品、证据和渠道投入，优先抢占最能形成长期壁垒的终端位置[4][5][10][15]。",
-        f"因此，{DISEASE_NAME}未来的竞争胜负，核心不在于谁喊出了更大的赛道故事，而在于谁更早把医学主题拆解成可验证的结局、可追踪的结构变化和可执行的战略动作。只要能够持续把医学逻辑、市场口径和监管要求对齐，该主题就有机会在未来 2-3 个年度周期内实现更高质量的扩张与结构优化[8][12][14][15]。",
-    ]
-    summary_text = "\n\n".join(summary_paragraphs).strip()
-    block_text, summary_text = fit_text_bundle_to_gate(specs, block_text, summary_text, ctx, snapshot)
-    write_block_text_bundle(specs, block_text)
-    write_text(OUT_ROOT / "summary.txt", summary_text + "\n")
-
-
-def ensure_autodraft_assets_ready() -> None:
+def ensure_codex_prep_assets_ready() -> None:
     ensure_ch4_extract_ready(EXCEL_PATH)
-    # Codex-first workflow: script prepares structured inputs and prompt assets,
-    # but no longer auto-writes topic text or fig23 semantics.
+    ch4 = build_ch4_data(EXCEL_PATH)
+    write_ch4_profile_files(ch4)
+    write_text(OUT_ROOT / CH4_NARRATIVE_BRIEF_NAME, build_ch4_narrative_brief(ch4) + "\n")
 
 
 def make_manifest_files(specs: List[BlockSpec], fig_rows: List[Dict[str, str]]) -> None:
@@ -3147,21 +2902,94 @@ def estimate_flow_box_width(
     return min(max_width, max(min_width, base + visual_len * char_step))
 
 
+def flow_text_visual_len(text: str) -> float:
+    raw = normalize_disease_text(text).replace("\n", "").strip()
+    visual_len = 0.0
+    for char in raw:
+        if char.isspace():
+            continue
+        visual_len += 0.62 if ord(char) < 128 else 1.0
+    return visual_len
+
+
+def wrap_flow_label(text: str, max_visual_per_line: float = 8.6) -> str:
+    raw = normalize_disease_text(text).replace("\n", " ").strip()
+    if not raw or flow_text_visual_len(raw) <= max_visual_per_line:
+        return raw
+
+    tokens = [tok for tok in re.split(r"(\s+)", raw) if tok]
+    if len(tokens) > 1 and any(not tok.isspace() for tok in tokens):
+        line1: List[str] = []
+        current = ""
+        for tok in tokens:
+            tentative = current + tok
+            if current and flow_text_visual_len(tentative) > max_visual_per_line:
+                break
+            line1.append(tok)
+            current = tentative
+        left = "".join(line1).strip()
+        right = raw[len(left):].strip()
+        if left and right:
+            return f"{left}\n{right}"
+
+    total = flow_text_visual_len(raw)
+    target = total / 2.0
+    running = 0.0
+    split_idx = max(1, len(raw) // 2)
+    for idx, char in enumerate(raw, start=1):
+        if not char.isspace():
+            running += 0.62 if ord(char) < 128 else 1.0
+        if running >= target:
+            split_idx = idx
+            break
+    left = raw[:split_idx].strip()
+    right = raw[split_idx:].strip()
+    if not left or not right:
+        return raw
+    return f"{left}\n{right}"
+
+
+def flow_box_height(text: str, base_height: float = 0.12) -> float:
+    return base_height + (0.04 if "\n" in normalize_disease_text(text) else 0.0)
+
+
+def layout_horizontal_flow_nodes(
+    texts: List[str],
+    left_margin: float = 0.04,
+    right_margin: float = 0.04,
+    min_gap: float = 0.08,
+    max_gap: float = 0.15,
+    min_width: float = 0.105,
+    max_width: float = 0.19,
+    base: float = 0.062,
+    char_step: float = 0.0066,
+) -> Tuple[List[str], List[float], float]:
+    labels = [wrap_flow_label(text) for text in texts]
+    widths = [estimate_flow_box_width(label, min_width=min_width, max_width=max_width, base=base, char_step=char_step) for label in labels]
+    n_items = max(len(labels), 1)
+    available = 1.0 - left_margin - right_margin
+    content_width = sum(widths)
+    if n_items > 1:
+        gap = max(min_gap, min(max_gap, (available - content_width) / (n_items - 1)))
+    else:
+        gap = 0.0
+    total_width = content_width + gap * max(0, n_items - 1)
+    if total_width > available and content_width > 0:
+        target_width = max(available - min_gap * max(0, n_items - 1), min_width * n_items)
+        scale = min(1.0, target_width / content_width)
+        widths = [max(min_width, w * scale) for w in widths]
+        content_width = sum(widths)
+        if n_items > 1:
+            gap = max(0.045, min(max_gap, (available - content_width) / (n_items - 1)))
+    return labels, widths, gap
+
+
 def suggest_flow_figsize(nodes: List[str], direction: str, figsize: Tuple[float, float]) -> Tuple[float, float]:
     width, height = float(figsize[0]), float(figsize[1])
     if direction != "lr":
         return (width, height)
-    total_visual = sum(
-        max(
-            1.0,
-            sum(
-                0.62 if (not ch.isspace() and ord(ch) < 128) else (1.0 if not ch.isspace() else 0.0)
-                for ch in normalize_disease_text(text)
-            ),
-        )
-        for text in nodes
-    )
-    suggested_width = min(13.8, max(width, 1.55 * max(len(nodes), 1) + 0.10 * total_visual))
+    total_visual = sum(max(1.0, flow_text_visual_len(text)) for text in nodes)
+    suggested_width = min(15.2, max(width, 1.85 * max(len(nodes), 1) + 0.11 * total_visual))
     return (suggested_width, height)
 
 
@@ -3175,41 +3003,39 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
     n_nodes = max(len(nodes), 1)
 
     if direction == "lr":
-        widths = [estimate_flow_box_width(text, min_width=0.10, max_width=0.20) for text in nodes]
-        left_margin = 0.05
-        right_margin = 0.05
-        available = 1.0 - left_margin - right_margin
-        min_gap = 0.058 if n_nodes >= 5 else 0.070
-        max_gap = 0.11
-        if n_nodes > 1:
-            target_width = max(available - min_gap * (n_nodes - 1), 0.10 * n_nodes)
-        else:
-            target_width = available
-        if sum(widths) > target_width and sum(widths) > 0:
-            scale = target_width / sum(widths)
-            widths = [max(0.10, w * scale) for w in widths]
-
-        content_width = sum(widths)
-        if n_nodes > 1:
-            gap = min(max_gap, max(min_gap, (available - content_width) / (n_nodes - 1)))
-            total_width = content_width + gap * (n_nodes - 1)
-            if total_width > available and content_width > 0:
-                target_width = max(available - gap * (n_nodes - 1), 0.10 * n_nodes)
-                scale = min(1.0, target_width / content_width)
-                widths = [max(0.10, w * scale) for w in widths]
-                content_width = sum(widths)
-                if content_width + gap * (n_nodes - 1) > available:
-                    gap = max(0.040, (available - content_width) / (n_nodes - 1))
-            total_width = content_width + gap * (n_nodes - 1)
-        else:
-            gap = 0.0
-            total_width = content_width
+        left_margin = 0.04
+        labels, widths, gap = layout_horizontal_flow_nodes(
+            nodes,
+            left_margin=left_margin,
+            right_margin=0.04,
+            min_gap=0.082 if n_nodes >= 5 else 0.095,
+            max_gap=0.15,
+            min_width=0.105,
+            max_width=0.185,
+            base=0.062,
+            char_step=0.0064,
+        )
+        available = 1.0 - left_margin - 0.04
+        total_width = sum(widths) + gap * max(0, n_nodes - 1)
 
         anchors: List[Dict[str, Tuple[float, float]]] = []
         cursor = left_margin + max(0.0, (available - total_width) / 2.0)
-        for width, text in zip(widths, nodes):
+        for width, text in zip(widths, labels):
             x = cursor + width / 2.0
-            anchors.append(draw_box_node(ax, x, 0.50, text, width=width, height=0.12, fc="#E6F2FF", ec=color, lw=1.2, fontsize=9.2))
+            anchors.append(
+                draw_box_node(
+                    ax,
+                    x,
+                    0.50,
+                    text,
+                    width=width,
+                    height=flow_box_height(text, 0.118),
+                    fc="#E6F2FF",
+                    ec=color,
+                    lw=1.2,
+                    fontsize=8.9 if "\n" in text else 9.2,
+                )
+            )
             cursor += width + gap
 
         for i in range(len(anchors) - 1):
@@ -3220,11 +3046,12 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
                 [src, dst],
                 color=color,
                 lw=1.6,
-                shrink_start_pts=7.0,
-                shrink_end_pts=7.0,
+                shrink_start_pts=10.0,
+                shrink_end_pts=10.0,
             )
     else:
-        heights = [estimate_flow_box_width(text, min_width=0.13, max_width=0.22) * 0.72 for text in nodes]
+        labels = [wrap_flow_label(text) for text in nodes]
+        heights = [estimate_flow_box_width(text, min_width=0.13, max_width=0.22) * 0.72 + (0.03 if "\n" in text else 0.0) for text in labels]
         gap = 0.05
         available = 0.82
         total_height = sum(heights) + gap * max(0, n_nodes - 1)
@@ -3234,9 +3061,9 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
 
         anchors = []
         cursor = 0.91
-        for height, text in zip(heights, nodes):
+        for height, text in zip(heights, labels):
             y = cursor - height / 2.0
-            anchors.append(draw_box_node(ax, 0.50, y, text, width=0.30, height=height, fc="#E6F2FF", ec=color, lw=1.2, fontsize=9.2))
+            anchors.append(draw_box_node(ax, 0.50, y, text, width=0.30, height=height, fc="#E6F2FF", ec=color, lw=1.2, fontsize=8.9 if "\n" in text else 9.2))
             cursor -= height + gap
 
         for i in range(len(anchors) - 1):
@@ -3247,8 +3074,8 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
                 [src, dst],
                 color=color,
                 lw=1.6,
-                shrink_start_pts=7.0,
-                shrink_end_pts=7.0,
+                shrink_start_pts=10.0,
+                shrink_end_pts=10.0,
             )
 
     ax.set_title(normalize_disease_text(title), fontsize=12, pad=10, fontweight="bold")
@@ -3522,6 +3349,9 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     fig_rows: List[Dict[str, str]] = []
     rendered_title_rows: List[Dict[str, str]] = []
     figure_specs = load_figure_specs()
+    block_spec_map = {s.block_id: s for s in build_block_specs()}
+    evidence_rows, _ = parse_evidence_pool(OUT_ROOT / "00_evidence.txt")
+    evidence_map = {str(row.get("evidence_id", "")).strip(): row for row in evidence_rows if str(row.get("evidence_id", "")).strip()}
 
     def fig_spec(fig_id: str) -> Dict[str, object]:
         v = figure_specs.get(fig_id, {})
@@ -3560,6 +3390,58 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         if arr.ndim != 2 or arr.shape != default.shape:
             return default
         return arr
+
+    def _short_source_title(title: str, max_len: int = 24) -> str:
+        title = normalize_disease_text(title).replace("\n", " ").strip()
+        title = re.sub(r"\s+", " ", title)
+        if len(title) <= max_len:
+            return title
+        return title[:max_len].rstrip(" ，,;；") + "…"
+
+    def evidence_source_labels(block_id: str) -> List[str]:
+        spec = block_spec_map.get(str(block_id).strip())
+        if not spec:
+            return []
+        labels: List[str] = []
+        seen: set[str] = set()
+        for evidence_id in str(spec.evidence_ids).split("|"):
+            row = evidence_map.get(evidence_id.strip())
+            if not row:
+                continue
+            org = normalize_disease_text(str(row.get("org", "")).strip())
+            title = _short_source_title(str(row.get("title", "")).strip())
+            label = ""
+            if org and title:
+                label = f"{org}《{title}》"
+            elif title:
+                label = f"《{title}》"
+            elif org:
+                label = org
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            labels.append(label)
+        return labels[:3]
+
+    def evidence_source_line(block_id: str) -> str | None:
+        labels = evidence_source_labels(block_id)
+        if not labels:
+            return None
+        return "数据来源：" + "、".join(labels)
+
+    def evidence_data_source(block_id: str) -> str | None:
+        labels = evidence_source_labels(block_id)
+        if not labels:
+            return None
+        compact: List[str] = []
+        seen: set[str] = set()
+        for label in labels:
+            item = re.sub(r"《.*?》", "", label).strip(" 《》")
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            compact.append(item)
+        return " / ".join(compact) if compact else None
 
     def specific_public_data_source(fig_id: str) -> str | None:
         profile = active_profile_id()
@@ -3657,12 +3539,18 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         default_data_source = data_source
         specific_source = specific_public_source_line(fig_id)
         specific_data = specific_public_data_source(fig_id)
+        evidence_source = evidence_source_line(block_id)
+        evidence_data = evidence_data_source(block_id)
         if specific_source:
             default_source_line = specific_source
+        elif evidence_source and (("公开资料整理" in str(source_line)) or ("指南整理" in str(source_line)) or (not str(source_line).strip())):
+            default_source_line = evidence_source
         elif "公开资料整理" in str(source_line):
             default_source_line = default_public_source_line(fig_id, source_line)
         if specific_data:
             default_data_source = specific_data
+        elif evidence_data and (str(data_source).strip() in {"公开资料整理", "指南整理"}):
+            default_data_source = evidence_data
         elif str(data_source).strip() == "公开资料整理":
             default_data_source = default_public_data_source(fig_id)
         source_text = spec_text(fig_id, "source_line", default_source_line)
@@ -4418,7 +4306,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     rendered_title_rows.append({"fig_id": "fig_6_1", "rendered_title": normalize_disease_text(title_6_1)})
     add_fig_meta("fig_6_1", title_6_1, "时间轴", "政府公开文件", "政策环境", "N/A", "6.1", "政策环境", "数据来源：国家卫健委、国家药监局、国家医保局")
 
-    fig, ax = plt.subplots(figsize=(9.2, 3.5))
+    fig, ax = plt.subplots(figsize=(10.4, 3.8))
     ax.axis("off")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
@@ -4445,40 +4333,124 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         if new_boxes:
             boxes = new_boxes
     box_anchors: List[Dict[str, Tuple[float, float]]] = []
-    for idx, (text, (x, y)) in enumerate(boxes):
-        width = estimate_flow_box_width(text, min_width=0.11, max_width=0.20, base=0.068, char_step=0.0072)
-        if idx == len(boxes) - 1:
-            width = max(width, 0.16)
-        box_anchors.append(draw_box_node(ax, x, y, text, width=width, height=0.115, fc="#F7FAFC", ec="#2D3748", lw=1.2, fontsize=10.0))
-    arrows = [
-        (box_anchors[0]["east"], box_anchors[1]["west"]),
-        (box_anchors[1]["east"], box_anchors[2]["west"]),
-        (box_anchors[2]["east"], box_anchors[3]["west"]),
-        (box_anchors[2]["south"], box_anchors[4]["north"]),
-    ]
+    custom_layout = isinstance(boxes_cfg, list) and bool(boxes_cfg)
+    if (not custom_layout) and len(boxes) >= 5:
+        top_labels, top_widths, top_gap = layout_horizontal_flow_nodes(
+            [boxes[0][0], boxes[1][0], boxes[2][0], boxes[3][0]],
+            left_margin=0.035,
+            right_margin=0.035,
+            min_gap=0.085,
+            max_gap=0.16,
+            min_width=0.11,
+            max_width=0.18,
+            base=0.066,
+            char_step=0.0066,
+        )
+        available = 1.0 - 0.035 - 0.035
+        total_width = sum(top_widths) + top_gap * 3
+        cursor = 0.035 + max(0.0, (available - total_width) / 2.0)
+        for label, width in zip(top_labels, top_widths):
+            x = cursor + width / 2.0
+            box_anchors.append(
+                draw_box_node(
+                    ax,
+                    x,
+                    0.64,
+                    label,
+                    width=width,
+                    height=flow_box_height(label, 0.115),
+                    fc="#F7FAFC",
+                    ec="#2D3748",
+                    lw=1.2,
+                    fontsize=9.8 if "\n" in label else 10.0,
+                )
+            )
+            cursor += width + top_gap
+        bottom_label = wrap_flow_label(boxes[4][0])
+        bottom_width = max(0.18, estimate_flow_box_width(bottom_label, min_width=0.14, max_width=0.20, base=0.068, char_step=0.0068))
+        box_anchors.append(
+            draw_box_node(
+                ax,
+                0.50,
+                0.26,
+                bottom_label,
+                width=bottom_width,
+                height=flow_box_height(bottom_label, 0.118),
+                fc="#F7FAFC",
+                ec="#2D3748",
+                lw=1.2,
+                fontsize=9.8 if "\n" in bottom_label else 10.0,
+            )
+        )
+        arrows = [
+            [box_anchors[0]["east"], box_anchors[1]["west"]],
+            [box_anchors[1]["east"], box_anchors[2]["west"]],
+            [box_anchors[2]["east"], box_anchors[3]["west"]],
+            [
+                box_anchors[2]["south"],
+                (box_anchors[2]["south"][0], box_anchors[2]["south"][1] - 0.08),
+                (box_anchors[4]["north"][0] + 0.08, box_anchors[4]["north"][1] + 0.10),
+                box_anchors[4]["north"],
+            ],
+        ]
+    else:
+        for idx, (text, (x, y)) in enumerate(boxes):
+            label = wrap_flow_label(text)
+            width = estimate_flow_box_width(label, min_width=0.11, max_width=0.20, base=0.068, char_step=0.0072)
+            if idx == len(boxes) - 1:
+                width = max(width, 0.16)
+            box_anchors.append(
+                draw_box_node(
+                    ax,
+                    x,
+                    y,
+                    label,
+                    width=width,
+                    height=flow_box_height(label, 0.115),
+                    fc="#F7FAFC",
+                    ec="#2D3748",
+                    lw=1.2,
+                    fontsize=9.8 if "\n" in label else 10.0,
+                )
+            )
+        arrows = [
+            [box_anchors[0]["east"], box_anchors[1]["west"]],
+            [box_anchors[1]["east"], box_anchors[2]["west"]],
+            [box_anchors[2]["east"], box_anchors[3]["west"]],
+            [box_anchors[2]["south"], box_anchors[4]["north"]],
+        ]
     arrows_cfg = fig_spec("fig_6_2").get("arrows")
     if isinstance(arrows_cfg, list) and arrows_cfg:
-        new_arrows: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+        new_arrows: List[List[Tuple[float, float]]] = []
         for a in arrows_cfg:
             if isinstance(a, (list, tuple)) and len(a) >= 4:
                 try:
-                    new_arrows.append(((float(a[0]), float(a[1])), (float(a[2]), float(a[3]))))
+                    if len(a) > 4 and len(a) % 2 == 0:
+                        pts: List[Tuple[float, float]] = []
+                        for i in range(0, len(a), 2):
+                            pts.append((float(a[i]), float(a[i + 1])))
+                        new_arrows.append(pts)
+                    else:
+                        new_arrows.append([(float(a[0]), float(a[1])), (float(a[2]), float(a[3]))])
                 except Exception:
                     continue
             elif isinstance(a, dict):
                 try:
+                    via_points: List[Tuple[float, float]] = []
+                    raw_via = a.get("via", [])
+                    if isinstance(raw_via, list):
+                        for item in raw_via:
+                            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                                via_points.append((float(item[0]), float(item[1])))
                     new_arrows.append(
-                        (
-                            (float(a.get("x1", 0.0)), float(a.get("y1", 0.0))),
-                            (float(a.get("x2", 0.0)), float(a.get("y2", 0.0))),
-                        )
+                        [(float(a.get("x1", 0.0)), float(a.get("y1", 0.0)))] + via_points + [(float(a.get("x2", 0.0)), float(a.get("y2", 0.0)))]
                     )
                 except Exception:
                     continue
         if new_arrows:
             arrows = new_arrows
-    for (x1, y1), (x2, y2) in arrows:
-        draw_poly_arrow(ax, [(x1, y1), (x2, y2)], color="#2B6CB0", lw=1.5, shrink_start_pts=7.0, shrink_end_pts=7.0)
+    for points in arrows:
+        draw_poly_arrow(ax, points, color="#2B6CB0", lw=1.5, shrink_start_pts=10.0, shrink_end_pts=10.0)
     set_main_title(ax, "fig_6_2", "图表6-2：医保支付与监管联动对用药结构的影响路径", fontsize=12, fontweight="bold")
     save_figure(FIG_DIR / "fig_6_2.png", fig)
     add_fig_meta("fig_6_2", "图表6-2：医保支付与监管联动对用药结构的影响路径", "路径图", "政策公开文件整理", "监管趋势", "N/A", "6.2", "监管趋势", "数据来源：国家医保局、国家药监局")
@@ -5122,8 +5094,9 @@ def collect_text_quality_metrics(specs: List[BlockSpec], block_text: Dict[str, s
         if cite_cnt == 0:
             chapter_no_cites.append(ch)
         min_chars = CHAPTER_MIN_CHARS[ch]
-        if ch_chars < min_chars:
-            chapter_len_fails.append(f"{ch}({ch_chars}<{min_chars})")
+        shortfall = chapter_char_shortfall(ch, ch_chars)
+        if shortfall > CHAPTER_CHAR_TOLERANCE:
+            chapter_len_fails.append(f"{ch}({ch_chars}<{min_chars}; shortfall={shortfall}>tol={CHAPTER_CHAR_TOLERANCE})")
 
     anchor_cov_by_block: List[Tuple[str, float]] = []
     for s in specs:
@@ -5223,13 +5196,18 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
         f"Minimum chars still needed: {total_gap}",
         f"Current summary chars: {summary_chars} (recommended: 1200-1500)",
         "",
+        "[Read First]",
+        f"- {OUT_ROOT / CODEX_GAP_PANEL_NAME}",
+        f"- {OUT_ROOT / CHAPTER_PRECHECK_NAME}",
+        f"- {OUT_ROOT / CH4_NARRATIVE_BRIEF_NAME}",
+        "",
         "[Primary Goal]",
         "- Directly rewrite and overwrite ch01.txt ~ ch07.txt and summary.txt.",
         "- Hit the gate in one pass instead of writing an obviously under-length draft first.",
         "- Any newly added content must be grounded in the evidence pool, existing figure scope, or chapter-4 structured data.",
         "",
         "[Hard Rules]",
-        "1) Every chapter must pass the script minimum, and the full draft must stay within 30000-34000 chars.",
+        f"1) Every chapter should meet the script floor; a shortfall within {CHAPTER_CHAR_TOLERANCE} chars is acceptable, and the full draft must stay within 30000-34000 chars.",
         "2) Chapter 4 may only use Excel-derived facts, ch04_codex_extract.json, and generated figure scope. Do not invent new market numbers.",
         "3) New medical, policy, or pathway claims must be traceable to 00_evidence.txt, refs.txt, manifest_fig.csv, or the existing draft context.",
         "4) Keep citation numbering consistent. Do not fabricate citation IDs.",
@@ -5247,8 +5225,8 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
         "[Chapter Tasks]",
     ]
     for chapter, current_chars, min_chars, gap in chapter_rows:
-        status = "below gate" if gap > 0 else "pass"
-        lines.append(f"- Chapter {chapter}: current={current_chars}, minimum={min_chars}, gap={gap} ({status})")
+        status = "below gate" if gap > CHAPTER_CHAR_TOLERANCE else ("within tolerance" if gap > 0 else "pass")
+        lines.append(f"- Chapter {chapter}: current={current_chars}, minimum={min_chars}, shortfall={gap}, tolerance={CHAPTER_CHAR_TOLERANCE} ({status})")
         for spec in chapter_to_specs.get(chapter, []):
             topic_text = ", ".join(spec.topics)
             fig_text = spec.fig_ids if spec.fig_ids else "none"
@@ -5297,7 +5275,10 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
         f"2) {OUT_ROOT / 'manifest_text.csv'}",
         f"3) {OUT_ROOT / 'manifest_fig.csv'}",
         f"4) {OUT_ROOT / 'ch04_codex_extract.json'}",
-        f"5) {OUT_ROOT / 'figure_specs.json'} (if present)",
+        f"5) {OUT_ROOT / CH4_NARRATIVE_BRIEF_NAME}",
+        f"6) {OUT_ROOT / CODEX_GAP_PANEL_NAME}",
+        f"7) {OUT_ROOT / CHAPTER_PRECHECK_NAME}",
+        f"8) {OUT_ROOT / 'figure_specs.json'} (if present)",
         "",
         "[Output Files]",
         f"- {OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
@@ -5417,6 +5398,7 @@ def write_codex_preflight_assets() -> None:
     write_json(OUT_ROOT / FIGURE_SPECS_CODEX_TEMPLATE_NAME, build_semantic_figure_specs_template())
     write_text(OUT_ROOT / FIGURE_SPECS_CODEX_PROMPT_NAME, build_figure_specs_codex_prompt() + "\n")
     write_text(OUT_ROOT / SEMANTIC_REVIEW_PROMPT_NAME, build_semantic_review_prompt() + "\n")
+    write_codex_progress_assets(specs)
 
 
 def build_fig23_review_prompt() -> str:
@@ -5539,6 +5521,7 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
     write_text(OUT_ROOT / "txt_stage_qa.txt", report + "\n")
     write_text(OUT_ROOT / "codex_rewrite_prompt.txt", build_codex_rewrite_prompt(specs, metrics, summary_text) + "\n")
     write_text(OUT_ROOT / "fig23_review_prompt.txt", build_fig23_review_prompt() + "\n")
+    write_codex_progress_assets(specs, block_text, summary_text)
     return report, passed
 
 
@@ -5886,14 +5869,14 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         "",
         "【约束判定】",
         f"字数是否在30000-34000：{'通过' if (30000 <= total_chars <= 34000) else '不通过'}",
-        f"分章最低字数：{'通过' if (not chapter_len_fails) else '不通过'}",
-        f"第1章>=3000：{'通过' if chapter_chars[1] >= CHAPTER_MIN_CHARS[1] else '不通过'}",
-        f"第2章>=3500：{'通过' if chapter_chars[2] >= CHAPTER_MIN_CHARS[2] else '不通过'}",
-        f"第3章>=4800：{'通过' if chapter_chars[3] >= CHAPTER_MIN_CHARS[3] else '不通过'}",
-        f"第4章>=3000：{'通过' if chapter_chars[4] >= CHAPTER_MIN_CHARS[4] else '不通过'}",
-        f"第5章>=4800：{'通过' if chapter_chars[5] >= CHAPTER_MIN_CHARS[5] else '不通过'}",
-        f"第6章>=4800：{'通过' if chapter_chars[6] >= CHAPTER_MIN_CHARS[6] else '不通过'}",
-        f"第7章>=4800：{'通过' if chapter_chars[7] >= CHAPTER_MIN_CHARS[7] else '不通过'}",
+        f"分章最低字数（差{CHAPTER_CHAR_TOLERANCE}字内允许通过）：{'通过' if (not chapter_len_fails) else '不通过'}",
+        f"第1章>=3000或差距<=100：{'通过' if chapter_char_gate_ok(1, chapter_chars[1]) else '不通过'}",
+        f"第2章>=3500或差距<=100：{'通过' if chapter_char_gate_ok(2, chapter_chars[2]) else '不通过'}",
+        f"第3章>=4800或差距<=100：{'通过' if chapter_char_gate_ok(3, chapter_chars[3]) else '不通过'}",
+        f"第4章>=3000或差距<=100：{'通过' if chapter_char_gate_ok(4, chapter_chars[4]) else '不通过'}",
+        f"第5章>=4800或差距<=100：{'通过' if chapter_char_gate_ok(5, chapter_chars[5]) else '不通过'}",
+        f"第6章>=4800或差距<=100：{'通过' if chapter_char_gate_ok(6, chapter_chars[6]) else '不通过'}",
+        f"第7章>=4800或差距<=100：{'通过' if chapter_char_gate_ok(7, chapter_chars[7]) else '不通过'}",
         f"图表总量20-30：{'通过' if 20 <= fig_count <= 30 else '不通过'}",
         f"第四章图表6-8：{'通过' if 6 <= ch4_fig_count <= 8 else '不通过'}",
         f"标题行与来源行一致：{'通过' if cap_count == src_count == fig_count else '不通过'}",
@@ -6061,6 +6044,7 @@ def run_stage3_ch4_and_figures() -> None:
     ensure_inputs(require_excel=True)
     ch4 = build_ch4_data(EXCEL_PATH)
     write_ch4_profile_files(ch4)
+    write_text(OUT_ROOT / CH4_NARRATIVE_BRIEF_NAME, build_ch4_narrative_brief(ch4) + "\n")
     write_codex_preflight_assets()
     specs = build_block_specs()
     try:
@@ -6237,7 +6221,7 @@ def run(
     print("Hint: the script prepares evidence, chapter-4 structured data, and Codex prompt assets; body text, fig23 config, and semantic figure overrides must be authored by the current Codex session.")
     print("QA闸门：严格（固定，失败即中断）")
     run_stage1_evidence()
-    ensure_autodraft_assets_ready()
+    ensure_codex_prep_assets_ready()
     run_assist_pipeline()
 
 

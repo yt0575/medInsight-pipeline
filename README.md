@@ -13,7 +13,7 @@
 
 - 生成证据池、参考文献与 Codex 前置提示资产
 - 若缺失，自动抽取第4章结构化数据到 `autofile/<医学主题>/ch04_codex_extract.json`
-- 自动写出 `fig23_codex_spec_template.json`、`fig23_codex_prompt.txt`、`figure_specs_codex_template.json`、`figure_specs_codex_prompt.txt` 等辅助文件
+- 自动写出 `fig23_codex_spec_template.json`、`fig23_codex_prompt.txt`、`figure_specs_codex_template.json`、`figure_specs_codex_prompt.txt`、`codex_gap_panel.txt`、`chapter_precheck.txt`、`ch04_narrative_brief.txt` 等辅助文件
 - 由当前 Codex 会话主导写入 `ch01.txt` ~ `ch07.txt`、`summary.txt`、`fig23_codex_spec.json`，并按需回写 `figure_specs.json`
 - 装配最终 Word，并执行严格 QA
 

@@ -10,7 +10,7 @@
 
 - `README.md`：主流程与报告约束说明。
 - `template.docx`：最终交付所需的 Word 模板。
-- `*第四章数据.xlsx`：第4章市场分析的数据源文件。
+- `data/*.xlsx`：各医学主题第4章市场分析的数据源文件；单主题运行时默认读取 `data/<医学主题>.xlsx`。
 - `autofile/<疾病名>/`：生成产物目录（不存在时需自动创建）。
 - `autofile/<疾病名>/figures/`：全部导出的图表文件（如 `fig_1_1.png`、`fig_4_1.png`）。
 - `autofile/<疾病名>/ch04_codex_extract.json`：由 Codex 会话生成的第四章标准化结构化数据。
