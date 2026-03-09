@@ -3087,18 +3087,70 @@ def draw_pie_with_leaders(path: Path, title: str, labels: List[str], values: Lis
     wedges, _ = ax.pie(values, labels=None, startangle=90, colors=colors, wedgeprops={"linewidth": 1, "edgecolor": "white"})
     ax.axis("equal")
 
+    def distribute_side(items: List[Dict[str, float]], low: float = -1.18, high: float = 1.18, min_gap: float = 0.12) -> List[float]:
+        if not items:
+            return []
+        items = sorted(items, key=lambda item: item["target_y"])
+        ys = [max(low, min(high, item["target_y"])) for item in items]
+        for idx in range(1, len(ys)):
+            ys[idx] = max(ys[idx], ys[idx - 1] + min_gap)
+        overflow = ys[-1] - high
+        if overflow > 0:
+            ys = [y - overflow for y in ys]
+        for idx in range(len(ys) - 2, -1, -1):
+            ys[idx] = min(ys[idx], ys[idx + 1] - min_gap)
+        underflow = low - ys[0]
+        if underflow > 0:
+            ys = [y + underflow for y in ys]
+        return ys
+
+    annotations: List[Dict[str, object]] = []
     for i, w in enumerate(wedges):
         ang = (w.theta2 + w.theta1) / 2.0
         x = math.cos(math.radians(ang))
         y = math.sin(math.radians(ang))
+        annotations.append(
+            {
+                "index": i,
+                "x": x,
+                "y": y,
+                "side": 1 if x >= 0 else -1,
+                "target_y": 1.16 * y,
+            }
+        )
+
+    right_items = [item for item in annotations if int(item["side"]) > 0]
+    left_items = [item for item in annotations if int(item["side"]) < 0]
+    right_y = distribute_side(right_items)
+    left_y = distribute_side(left_items)
+
+    for item, adjusted_y in zip(right_items, right_y):
+        item["adjusted_y"] = adjusted_y
+    for item, adjusted_y in zip(left_items, left_y):
+        item["adjusted_y"] = adjusted_y
+
+    for item in annotations:
+        idx = int(item["index"])
+        x = float(item["x"])
+        y = float(item["y"])
+        side = int(item["side"])
+        adjusted_y = float(item.get("adjusted_y", 1.16 * y))
+        label = f"{normalize_disease_text(labels[idx])} {values[idx]:.1f}%"
         ax.annotate(
-            f"{normalize_disease_text(labels[i])} {values[i]:.1f}%",
-            xy=(x * 0.8, y * 0.8),
-            xytext=(1.22 * np.sign(x), 1.15 * y),
-            ha="left" if x >= 0 else "right",
+            label,
+            xy=(x * 0.82, y * 0.82),
+            xytext=(1.34 * side, adjusted_y),
+            ha="left" if side > 0 else "right",
             va="center",
-            fontsize=9,
-            arrowprops=dict(arrowstyle="-", color="#444444", lw=0.9, shrinkA=0, shrinkB=0, connectionstyle="arc3,rad=0"),
+            fontsize=8.7,
+            arrowprops=dict(
+                arrowstyle="-",
+                color="#444444",
+                lw=0.9,
+                shrinkA=0,
+                shrinkB=0,
+                connectionstyle="arc3,rad=0",
+            ),
         )
 
     ax.set_title(normalize_disease_text(title), fontsize=12, fontweight="bold")
