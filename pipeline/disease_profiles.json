@@ -444,6 +444,44 @@
       }
     },
     {
+      "id": "functional_dyspepsia",
+      "priority": 120,
+      "keywords": [
+        "功能性消化不良",
+        "functional dyspepsia",
+        "餐后不适综合征",
+        "上腹痛综合征",
+        "餐后饱胀",
+        "早饱",
+        "上腹烧灼感",
+        "FD"
+      ],
+      "query_aliases": {
+        "功能性消化不良": "functional dyspepsia",
+        "FD": "functional dyspepsia"
+      },
+      "fig23_layout_mode": "systems_map",
+      "fig23_require_core_node": true,
+      "fig23_core_label_template": "{disease}\\n(脑肠轴失衡/胃动力异常)",
+      "fig23_disallow_nodes": [
+        "肿瘤系统"
+      ],
+      "fig23_top_to_core": [
+        "脑肠轴调控",
+        "胃动力异常",
+        "内脏高敏感"
+      ],
+      "fig23_core_to_bottom": [
+        "餐后不适/早饱",
+        "睡眠情绪负担",
+        "长期复评管理"
+      ],
+      "fig23_semantic": {
+        "expected_title_template": "图表2-3：{disease}相关系统关系图（分层布局）",
+        "forbidden_title_templates": []
+      }
+    },
+    {
       "id": "gastritis",
       "priority": 110,
       "keywords": [

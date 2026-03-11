@@ -28,7 +28,7 @@ python scripts/run_pipeline.py --all-topics
 - `--disease "<医学主题>"`：兼容旧参数，等同于 `--topic`
 - `--all-topics`：遍历 `data` 目录下全部 `*.xlsx`
 - `--data-dir "data"`：批量模式的数据目录
-- `--from-readme`：从 `README.md` 读取 `医学主题：`；同时兼容旧的 `疾病名：`
+- `--from-readme`：从 `README.md` 中的 `医学主题：` 配置行读取主题；同时兼容旧的 `疾病名：`
 - `--readme "README.md"`：指定读取配置的 README
 - `--xlsx "data/<医学主题>.xlsx"`：覆盖默认 Excel 路径
 - `--template "template.docx"`：覆盖模板路径
@@ -59,6 +59,12 @@ python scripts/run_pipeline.py --all-topics
 - `figure_specs.json`（按需）
 - `ch01.txt` ~ `ch07.txt`
 - `summary.txt`
+
+## 图表导出说明
+
+- 所有 PNG 图表统一按 Word 插入宽度导出，避免不同原始宽度导致插入 `.docx` 后缩放不一致。
+- 图表主标题 `图表x-x：xxx` 与图片内嵌 `数据来源：xxxx` 使用统一字体与字号。
+- 图内数据层文字会按图表类型单独控制；流程图、时间线图与关系图优先采用换行、多排与避让布局，而不是强行单排。
 
 ## 验收输出
 

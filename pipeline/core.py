@@ -15,6 +15,7 @@ import math
 import re
 import shutil
 import zipfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
+from matplotlib import font_manager
 from matplotlib.patches import FancyBboxPatch
 from docx import Document
 from openpyxl import load_workbook
@@ -33,7 +36,17 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches
 
 
-matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
+FIGURE_FONT_FAMILY = "SimSun"
+FIGURE_FONT_FAMILY_FALLBACKS = ["宋体", "SimSun", "SimHei", "Microsoft YaHei", "Arial Unicode MS", "DejaVu Sans"]
+FIGURE_TITLE_WORD_EQUIVALENT_FONT_PT = 12.0  # 标题/来源统一固定字号
+FIGURE_BODY_WORD_EQUIVALENT_FONT_PT = 8.5  # 图内数据文字略小一档
+FIGURE_BODY_FONT_PT_MIN = 8.0
+FIGURE_BODY_FONT_PT_MAX = 12.0
+FIGURE_RENDER_DPI = 300
+
+matplotlib.rcParams["font.sans-serif"] = FIGURE_FONT_FAMILY_FALLBACKS
+matplotlib.rcParams["font.family"] = [FIGURE_FONT_FAMILY]
+matplotlib.rcParams["font.size"] = FIGURE_BODY_WORD_EQUIVALENT_FONT_PT
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 
@@ -70,6 +83,9 @@ LEGACY_DISEASE_TOKENS = [
 
 QUARTER_RE = re.compile(r"^(20\d{2})Q([1-4])$")
 FIG_TITLE_SERIAL_RE = re.compile(r"^\s*图表\d+-\d+[：:]\s*")
+FIG_ID_RE = re.compile(r"^fig_(\d+)_(\d+)$")
+INLINE_H3_RE = re.compile(r"^(?P<num>\d+\.\d+\.\d+)\s+(?P<title>\S.*)$")
+MARKDOWN_H3_RE = re.compile(r"^#{3,4}\s+(?P<title>\S.*)$")
 FIG23_CODEX_SPEC_NAME = "fig23_codex_spec.json"
 FIG23_CODEX_SPEC_TEMPLATE_NAME = "fig23_codex_spec_template.json"
 FIG23_CODEX_PROMPT_NAME = "fig23_codex_prompt.txt"
@@ -90,6 +106,25 @@ CHAPTER_MIN_CHARS = {
     7: 4800,
 }
 CHAPTER_CHAR_TOLERANCE = 100
+SUMMARY_BLOCK_TARGET_CHARS = 500
+SUMMARY_BLOCK_WARN_CHARS = 650
+FIGURE_SOURCE_METADATA_KEY = "codex_source_line"
+FIGURE_SOURCE_EMBEDDED_KEY = "codex_source_embedded"
+FIGURE_SOURCE_STYLE_METADATA_KEY = "codex_source_style"
+DOCX_BODY_STYLE_NAME = "数据报告正文"
+DOCX_FIGURE_WIDTH_INCH = 5.6
+DOCX_BODY_FONT_FALLBACK = "宋体"
+DOCX_BODY_FONT_SIZE_PT_FALLBACK = 12.0
+_SOURCE_FOOTER_FONT_PATH_CACHE: Dict[str, str] = {}
+_DOCX_BODY_FONT_CACHE: Tuple[str | None, float | None] | None = None
+_DOCX_BODY_FONT_CACHE_PATH: Path | None = None
+_WORDML_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_DRAWINGML_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_XML_NS = {"w": _WORDML_NS, "a": _DRAWINGML_NS}
+_W_VAL = f"{{{_WORDML_NS}}}val"
+_W_STYLEID = f"{{{_WORDML_NS}}}styleId"
+_W_TYPE = f"{{{_WORDML_NS}}}type"
+_W_DEFAULT = f"{{{_WORDML_NS}}}default"
 LOW_CONFIDENCE_PROFILE_KEYWORDS = {
     "疼痛",
     "炎症",
@@ -1024,10 +1059,14 @@ def configure_runtime(
     out_base: Path | None = None,
 ) -> None:
     """Configure global runtime paths so the pipeline can run for any medical topic."""
-    global DISEASE_NAME, REPORT_TITLE, EXCEL_PATH, TEMPLATE_PATH, OUT_ROOT, FIG_DIR, FINAL_DOCX, _ACTIVE_PROFILE_CACHE
+    global DISEASE_NAME, REPORT_TITLE, EXCEL_PATH, TEMPLATE_PATH, OUT_ROOT, FIG_DIR, FINAL_DOCX
+    global _ACTIVE_PROFILE_CACHE, _DOCX_BODY_FONT_CACHE, _DOCX_BODY_FONT_CACHE_PATH, _SOURCE_FOOTER_FONT_PATH_CACHE
 
     DISEASE_NAME = disease_name.strip()
     _ACTIVE_PROFILE_CACHE = None
+    _DOCX_BODY_FONT_CACHE = None
+    _DOCX_BODY_FONT_CACHE_PATH = None
+    _SOURCE_FOOTER_FONT_PATH_CACHE = {}
     REPORT_TITLE = report_title_for_topic(DISEASE_NAME)
     EXCEL_PATH = Path(excel_path) if excel_path is not None else default_excel_path(DISEASE_NAME)
     TEMPLATE_PATH = Path(template_path) if template_path is not None else Path("template.docx")
@@ -1044,6 +1083,10 @@ def is_cervical_profile() -> bool:
 
 def is_respiratory_profile() -> bool:
     return active_profile_id() == "respiratory"
+
+
+def is_functional_dyspepsia_profile() -> bool:
+    return active_profile_id() == "functional_dyspepsia"
 
 
 def is_gastritis_profile() -> bool:
@@ -1287,6 +1330,13 @@ CH4_CHANNEL_ALIASES = {
     "电商": "线上端",
 }
 CH4_PLACEHOLDER_NAME_TERMS = ("示例", "sample", "example", "待替换", "todo")
+
+
+def ch4_top_has_meaningful_competition(df: pd.DataFrame) -> bool:
+    if df.empty:
+        return False
+    sales = pd.to_numeric(df["sales"], errors="coerce").fillna(0)
+    return bool(sales.gt(0).sum() >= 2)
 
 
 def normalize_ch4_channel(value: object) -> str:
@@ -1854,6 +1904,66 @@ def build_ch4_data(xlsx: Path) -> Ch4Data:
         ) from exc
 
 
+def load_ch4_data_for_runtime() -> Ch4Data | None:
+    extract_path = OUT_ROOT / "ch04_codex_extract.json"
+    if extract_path.exists():
+        try:
+            return build_ch4_data_from_codex_extract(extract_path)
+        except Exception:
+            return None
+    if EXCEL_PATH.exists():
+        try:
+            return build_ch4_data_from_legacy_parser(EXCEL_PATH)
+        except Exception:
+            return None
+    return None
+
+
+def chapter4_available_figure_ids(ch4: Ch4Data | None) -> set[str]:
+    available = {"fig_4_1", "fig_4_2", "fig_4_3"}
+    if ch4 is None:
+        return available | {"fig_4_5", "fig_4_6", "fig_4_7", "fig_4_8"}
+    if bool(ch4.yoy_latest["yoy_pct"].notna().any()):
+        available.add("fig_4_4")
+    if ch4_top_has_meaningful_competition(ch4.top_hospital):
+        available.add("fig_4_5")
+    if ch4_top_has_meaningful_competition(ch4.top_drugstore):
+        available.add("fig_4_6")
+    if ch4_top_has_meaningful_competition(ch4.top_online):
+        available.add("fig_4_7")
+    if (
+        (not ch4.cr5_latest.empty)
+        and bool(ch4.cr5_latest["cr5_pct"].notna().any())
+        and any(
+            ch4_top_has_meaningful_competition(df)
+            for df in [ch4.top_hospital, ch4.top_drugstore, ch4.top_online]
+        )
+    ):
+        available.add("fig_4_8")
+    return available
+
+
+def chapter4_missing_items(ch4: Ch4Data | None) -> List[str]:
+    if ch4 is None:
+        return []
+    missing: List[str] = []
+    if not bool(ch4.yoy_latest["yoy_pct"].notna().any()):
+        missing.append("三端同比增速（fig_4_4）")
+    if not ch4_top_has_meaningful_competition(ch4.top_hospital):
+        missing.append("医院端TOP10（fig_4_5）")
+    if not ch4_top_has_meaningful_competition(ch4.top_drugstore):
+        missing.append("药店端TOP10（fig_4_6）")
+    if not ch4_top_has_meaningful_competition(ch4.top_online):
+        missing.append("线上端TOP10（fig_4_7）")
+    if (
+        ch4.cr5_latest.empty
+        or (not bool(ch4.cr5_latest["cr5_pct"].notna().any()))
+        or (not any(ch4_top_has_meaningful_competition(df) for df in [ch4.top_hospital, ch4.top_drugstore, ch4.top_online]))
+    ):
+        missing.append("CR5集中度（fig_4_8）")
+    return missing
+
+
 def write_ch4_profile_files(ch4: Ch4Data) -> None:
     missing_top_channels = []
     if ch4.top_hospital.empty:
@@ -1986,7 +2096,13 @@ def build_ch4_narrative_brief(ch4: Ch4Data) -> str:
     cr5_lines: List[str] = []
     if not ch4.cr5_latest.empty:
         for _, row in ch4.cr5_latest.iterrows():
-            cr5_lines.append(f"- {str(row['channel']).strip()}: CR5={float(row['cr5_pct']):.2f}%")
+            value = row["cr5_pct"]
+            if pd.isna(value):
+                cr5_lines.append(f"- {str(row['channel']).strip()}: CR5 unavailable")
+            else:
+                cr5_lines.append(f"- {str(row['channel']).strip()}: CR5={float(value):.2f}%")
+
+    missing_items = chapter4_missing_items(ch4)
 
     lines = [
         "[Chapter 4 Narrative Brief]",
@@ -2024,6 +2140,14 @@ def build_ch4_narrative_brief(ch4: Ch4Data) -> str:
         ]
     )
     lines.extend(cr5_lines if cr5_lines else ["- CR5 data not available"])
+    if missing_items:
+        lines.extend(
+            [
+                "",
+                "[Omit If Missing]",
+            ]
+        )
+        lines.extend([f"- Omit the corresponding small subsection and figure: {item}" for item in missing_items])
     lines.extend(
         [
             "",
@@ -2033,6 +2157,7 @@ def build_ch4_narrative_brief(ch4: Ch4Data) -> str:
             "- Use top-product and CR5 structure to discuss concentration, not just scale.",
             "- Do not invent region-level conclusions because the workbook does not provide region data.",
             "- Keep every chapter-4 claim inside Excel-derived scope only.",
+            "- If a channel-level dataset is missing, omit that specific small subsection and figure instead of writing placeholder analysis.",
         ]
     )
     return "\n".join(lines)
@@ -2124,6 +2249,10 @@ def build_chapter_precheck(specs: List[BlockSpec], block_text: Dict[str, str], s
     for spec in specs:
         chapter_to_specs.setdefault(spec.chapter, []).append(spec)
 
+    metrics = collect_text_quality_metrics(specs, block_text)
+    rendered_h3_by_block: Dict[str, int] = metrics["rendered_h3_by_block"]  # type: ignore[assignment]
+    summary_block_chars: Dict[str, int] = metrics["summary_block_chars"]  # type: ignore[assignment]
+
     lines = [
         "[Chapter Precheck]",
         f"Topic: {DISEASE_NAME}",
@@ -2144,6 +2273,11 @@ def build_chapter_precheck(specs: List[BlockSpec], block_text: Dict[str, str], s
         anchor_cov = anchored / len(ch_paras) if ch_paras else 0.0
         ch_dup, _ = sentence_repeat_stats(ch_text)
         medical_hits = sum(1 for pattern in MEDICAL_PATTERNS.values() if re.search(pattern, ch_text)) if chapter <= 3 else -1
+        chapter_h3 = sum(int(rendered_h3_by_block.get(spec.block_id, 0)) for spec in ch_specs if not is_summary_block(spec.subtitle))
+        summary_specs = [spec for spec in ch_specs if is_summary_block(spec.subtitle)]
+        chapter_missing_h3_blocks = [
+            spec.block_id for spec in ch_specs if (not is_summary_block(spec.subtitle)) and int(rendered_h3_by_block.get(spec.block_id, 0)) == 0
+        ]
 
         fail_reasons: List[str] = []
         warn_reasons: List[str] = []
@@ -2166,10 +2300,16 @@ def build_chapter_precheck(specs: List[BlockSpec], block_text: Dict[str, str], s
             fail_reasons.append(f"sentence duplication too high ({ch_dup})")
         if chapter <= 3 and medical_hits < 2:
             fail_reasons.append(f"medical pattern hits too low ({medical_hits})")
+        if chapter_missing_h3_blocks:
+            fail_reasons.append("missing third-level headings in blocks=" + ",".join(chapter_missing_h3_blocks))
+        for spec in summary_specs:
+            summary_chars = int(summary_block_chars.get(spec.block_id, 0))
+            if summary_chars > SUMMARY_BLOCK_WARN_CHARS:
+                warn_reasons.append(f"{spec.block_id} summary too long ({summary_chars}>{SUMMARY_BLOCK_WARN_CHARS})")
 
         status = "FAIL" if fail_reasons else ("WARN" if warn_reasons else "PASS")
         lines.append(
-            f"- Chapter {chapter} | status={status} | chars={ch_chars} | paragraphs={len(ch_paras)} | citations={cite_cnt} | anchor_cov={anchor_cov*100:.1f}%"
+            f"- Chapter {chapter} | status={status} | chars={ch_chars} | paragraphs={len(ch_paras)} | citations={cite_cnt} | anchor_cov={anchor_cov*100:.1f}% | h3={chapter_h3}"
         )
         if chapter <= 3:
             lines.append(f"  medical_pattern_hits={medical_hits}")
@@ -2248,6 +2388,24 @@ def build_evidence_and_refs() -> Tuple[str, str]:
             ("E13", "How effective are physiotherapy interventions in treating people with sciatica? A systematic review and meta-analysis", "PubMed", "2023", "物理治疗是首线保守治疗的重要组成，但疗效受方案与人群分层影响", "https://pubmed.ncbi.nlm.nih.gov/36580149/"),
             ("E14", "Acupuncture vs Sham Acupuncture for Chronic Sciatica From Herniated Disk: A Randomized Clinical Trial", "PubMed", "2024", "针刺对慢性坐骨神经痛疼痛和功能改善具有循证支持", "https://pubmed.ncbi.nlm.nih.gov/39401008/"),
             ("E15", "法规文件", "国家药品监督管理局", "2025", "药品全生命周期监管、说明书合规和院外传播边界持续收紧", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
+        ]
+    elif is_functional_dyspepsia_profile():
+        evidence = [
+            ("E01", "ACG and CAG Clinical Guideline: Management of Dyspepsia", "American Journal of Gastroenterology", "2017", "功能性消化不良的年龄分层、内镜时机与 Hp test-and-treat 路径", "https://pubmed.ncbi.nlm.nih.gov/28631728/"),
+            ("E02", "British Society of Gastroenterology guidelines on the management of functional dyspepsia", "Gut", "2022", "FD 的诊断、脑肠轴管理、药物与心理行为干预建议", "https://gut.bmj.com/content/71/9/1697"),
+            ("E03", "Functional dyspepsia and overlap management evidence", "Rome Foundation/临床综述", "2023", "Rome IV 下 PDS/EPS 分型及重叠疾病管理边界", "https://www.theromefoundation.org"),
+            ("E04", "Functional Dyspepsia: Current Understanding and Future Perspective", "PubMed", "2023", "胃适应性受损、胃排空异常、内脏高敏和微炎症等机制", "https://pubmed.ncbi.nlm.nih.gov/37598673/"),
+            ("E05", "Global prevalence of functional dyspepsia according to Rome criteria, 1990-2020", "PubMed", "2024", "FD 全球患病率与 Rome 标准差异", "https://pubmed.ncbi.nlm.nih.gov/38378941/"),
+            ("E06", "Role of Low-FODMAP diet in functional dyspepsia", "PubMed", "2023", "饮食管理在 FD 长期症状控制中的定位", "https://pubmed.ncbi.nlm.nih.gov/37094910/"),
+            ("E07", "第五次全国幽门螺杆菌感染处理共识报告", "中华消化杂志", "2022", "消化不良人群中 Hp 检测、根除方案与复查窗口", "https://rs.yiigle.com/cmaid/1413767"),
+            ("E08", "Maastricht VI/Florence consensus report", "Gut", "2022", "Hp 管理国际推荐与功能性消化不良相关策略", "https://gut.bmj.com/content/71/9/1724"),
+            ("E09", "国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "人口结构变化影响功能性消化不良就医需求与院外管理", "https://www.stats.gov.cn/"),
+            ("E10", "国家基本医疗保险药品目录（2024年）", "国家医疗保障局", "2024", "支付规则影响抑酸、促动力与消化酶等用药可及性", "https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html"),
+            ("E11", "国家医保局2024年药品目录调整新闻发布会", "国家医疗保障局", "2024", "目录准入与临床价值导向影响功能性消化不良用药结构", "https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html"),
+            ("E12", "中国卫生健康统计年鉴及国家统计数据库", "国家卫生健康委员会/国家统计局", "2024", "门急诊与消化系统服务供给变化", "https://www.stats.gov.cn/"),
+            ("E13", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
+            ("E14", "The Usefulness of Symptom-based Subtypes of Functional Dyspepsia", "PubMed", "2021", "PDS/EPS 分型对病理机制和治疗选择的提示价值", "https://pubmed.ncbi.nlm.nih.gov/34210898/"),
+            ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "药品全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
         ]
     elif is_gastritis_profile():
         evidence = [
@@ -2335,6 +2493,24 @@ def build_evidence_and_refs() -> Tuple[str, str]:
             "[14] 中国中医药相关学会. 中医骨伤科颈椎病诊疗指南[S/OL]. 2021. https://guide.medlive.cn/guideline/26067",
             "[15] 国家药品监督管理局. 法规文件索引与政策发布[EB/OL]. 2024. https://www.nmpa.gov.cn/xxgk/fgwj/",
         ]
+    elif is_functional_dyspepsia_profile():
+        refs = [
+            "[1] American Journal of Gastroenterology. ACG and CAG Clinical Guideline: Management of Dyspepsia[EB/OL]. 2017. https://pubmed.ncbi.nlm.nih.gov/28631728/",
+            "[2] Gut. British Society of Gastroenterology guidelines on the management of functional dyspepsia[EB/OL]. 2022. https://gut.bmj.com/content/71/9/1697",
+            "[3] Rome Foundation. Functional dyspepsia and overlap management evidence[EB/OL]. 2023. https://www.theromefoundation.org/",
+            "[4] PubMed. Functional Dyspepsia: Current Understanding and Future Perspective[EB/OL]. 2023. https://pubmed.ncbi.nlm.nih.gov/37598673/",
+            "[5] PubMed. Global prevalence of functional dyspepsia according to Rome criteria, 1990-2020[EB/OL]. 2024. https://pubmed.ncbi.nlm.nih.gov/38378941/",
+            "[6] PubMed. Role of Low-FODMAP diet in functional dyspepsia[EB/OL]. 2023. https://pubmed.ncbi.nlm.nih.gov/37094910/",
+            "[7] 中华消化杂志. 第五次全国幽门螺杆菌感染处理共识报告[S/OL]. 2022. https://rs.yiigle.com/cmaid/1413767",
+            "[8] Gut. Maastricht VI/Florence consensus report[EB/OL]. 2022. https://gut.bmj.com/content/71/9/1724",
+            "[9] 国家统计局. 国家统计数据发布平台（人口与社会）[DB/OL]. 2024. https://www.stats.gov.cn/",
+            "[10] 国家医疗保障局. 国家基本医疗保险、工伤保险和生育保险药品目录（2024年）[S/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html",
+            "[11] 国家医疗保障局. 2024年药品目录调整新闻发布会[EB/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html",
+            "[12] 国家卫生健康委员会/国家统计局. 中国卫生健康统计年鉴及国家统计数据库[DB/OL]. 2024. https://www.stats.gov.cn/",
+            f"[13] 米内网/项目数据. {EXCEL_PATH.name}（医院/药店/线上口径）[DB]. 2025.",
+            "[14] PubMed. The Usefulness of Symptom-based Subtypes of Functional Dyspepsia[EB/OL]. 2021. https://pubmed.ncbi.nlm.nih.gov/34210898/",
+            "[15] 国家药品监督管理局. 法规文件索引与政策发布[EB/OL]. 2024. https://www.nmpa.gov.cn/xxgk/fgwj/",
+        ]
     elif is_gastritis_profile():
         refs = [
             "[1] 中华消化杂志. 中国慢性胃炎诊治指南（2022年，上海）[S/OL]. 2023. https://rs.yiigle.com/cmaid/1473570",
@@ -2392,6 +2568,128 @@ class BlockSpec:
     fig_ids: str
 
 
+def is_summary_block(subtitle: str) -> bool:
+    return "本章小结" in str(subtitle)
+
+
+def figure_sort_key(fig_id: str) -> Tuple[int, int]:
+    match = FIG_ID_RE.match(str(fig_id).strip())
+    if not match:
+        return (999, 999)
+    return (int(match.group(1)), int(match.group(2)))
+
+
+def summary_topics_for_chapter(chapter: int) -> List[str]:
+    mapping = {
+        1: ["定义边界", "机制主线", "风险锚点", "章节衔接"],
+        2: ["系统关联", "关键风险", "管理边界", "诊疗衔接"],
+        3: ["诊断路径", "治疗框架", "证据边界", "随访重点"],
+        4: ["口径说明", "核心发现", "竞争判断", "风险提示"],
+        5: ["人群结构", "终端偏好", "依从要点", "长期管理"],
+        6: ["政策主线", "监管边界", "支付约束", "趋势影响"],
+        7: ["预测主线", "情景差异", "关键变量", "风险提示"],
+    }
+    return mapping.get(int(chapter), ["核心结论", "关键证据", "风险提示", "章节衔接"])
+
+
+def distribute_delta(total_delta: int, slots: int) -> List[int]:
+    if total_delta <= 0 or slots <= 0:
+        return [0] * max(slots, 0)
+    base, extra = divmod(total_delta, slots)
+    return [base + (1 if idx < extra else 0) for idx in range(slots)]
+
+
+def normalize_block_specs(specs: List[BlockSpec]) -> List[BlockSpec]:
+    normalized = [
+        BlockSpec(
+            block_id=s.block_id,
+            chapter=s.chapter,
+            subtitle=s.subtitle,
+            target_chars=int(s.target_chars),
+            topics=list(s.topics),
+            evidence_ids=s.evidence_ids,
+            fig_ids=s.fig_ids,
+        )
+        for s in specs
+    ]
+
+    available_ch4_figs = chapter4_available_figure_ids(load_ch4_data_for_runtime())
+    for spec in normalized:
+        if spec.chapter != 4:
+            continue
+        figs = [fig_id for fig_id in str(spec.fig_ids).split("|") if fig_id and fig_id in available_ch4_figs]
+        spec.fig_ids = "|".join(figs)
+
+    by_chapter: Dict[int, List[Tuple[int, BlockSpec]]] = {}
+    for idx, spec in enumerate(normalized):
+        by_chapter.setdefault(spec.chapter, []).append((idx, spec))
+
+    for chapter, chapter_specs in by_chapter.items():
+        non_summary_positions = [pos for pos, (_, spec) in enumerate(chapter_specs) if not is_summary_block(spec.subtitle)]
+        if not non_summary_positions:
+            continue
+
+        target_delta = 0
+        raw_assignments: Dict[str, int] = {}
+        for pos, (global_idx, spec) in enumerate(chapter_specs):
+            for fig_id in [item for item in str(spec.fig_ids).split("|") if item]:
+                raw_assignments[fig_id] = pos
+            if is_summary_block(spec.subtitle):
+                if int(spec.target_chars) > SUMMARY_BLOCK_TARGET_CHARS:
+                    target_delta += int(spec.target_chars) - SUMMARY_BLOCK_TARGET_CHARS
+                normalized[global_idx].target_chars = SUMMARY_BLOCK_TARGET_CHARS
+                normalized[global_idx].topics = summary_topics_for_chapter(chapter)
+
+        deltas = distribute_delta(target_delta, len(non_summary_positions))
+        for delta, pos in zip(deltas, non_summary_positions):
+            global_idx = chapter_specs[pos][0]
+            normalized[global_idx].target_chars += delta
+
+        adjusted_assignments: Dict[str, int] = {}
+        for fig_id, raw_pos in raw_assignments.items():
+            _, raw_spec = chapter_specs[raw_pos]
+            if is_summary_block(raw_spec.subtitle):
+                previous_positions = [pos for pos in non_summary_positions if pos < raw_pos]
+                next_positions = [pos for pos in non_summary_positions if pos > raw_pos]
+                if previous_positions:
+                    raw_pos = previous_positions[-1]
+                elif next_positions:
+                    raw_pos = next_positions[0]
+                else:
+                    raw_pos = non_summary_positions[0]
+            adjusted_assignments[fig_id] = raw_pos
+
+        monotonic_assignments: Dict[int, List[str]] = {}
+        last_pos = non_summary_positions[0]
+        for fig_id in sorted(adjusted_assignments.keys(), key=figure_sort_key):
+            current_pos = adjusted_assignments[fig_id]
+            if current_pos < last_pos:
+                current_pos = last_pos
+            monotonic_assignments.setdefault(current_pos, []).append(fig_id)
+            last_pos = current_pos
+
+        for pos, (global_idx, spec) in enumerate(chapter_specs):
+            if is_summary_block(spec.subtitle):
+                normalized[global_idx].fig_ids = ""
+            else:
+                assigned = sorted(monotonic_assignments.get(pos, []), key=figure_sort_key)
+                normalized[global_idx].fig_ids = "|".join(assigned)
+
+    return normalized
+
+
+def runtime_block_specs() -> List[BlockSpec]:
+    return normalize_block_specs(build_block_specs())
+
+
+def block_figure_assignment_map(specs: List[BlockSpec]) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for spec in specs:
+        for fig_id in [item for item in str(spec.fig_ids).split("|") if item]:
+            mapping[fig_id] = spec.block_id
+    return mapping
+
+
 def build_block_specs() -> List[BlockSpec]:
     if is_cervical_profile():
         return [
@@ -2405,9 +2703,9 @@ def build_block_specs() -> List[BlockSpec]:
             BlockSpec("3.2", 3, "3.2 西医治疗体系（药物、介入、手术、康复）", 1600, ["保守治疗", "药物镇痛", "介入治疗", "手术适应证", "安全监测"], "E03|E06|E13", "fig_3_2"),
             BlockSpec("3.3", 3, "3.3 中医辨证体系与常用方药", 1400, ["辨证分型", "治则治法", "中成药应用", "针灸推拿", "中西协同"], "E14|E13|E11", "fig_3_3"),
             BlockSpec("3.4", 3, "3.4 本章小结", 950, ["规范路径", "证据整合", "风险平衡", "长期管理"], "E13|E14|E15", ""),
-            BlockSpec("4.1", 4, "4.1 治疗药物市场概况", 900, ["渠道规模", "季度趋势", "结构占比", "增长驱动"], "E09|E10|E14", "fig_4_1|fig_4_2"),
-            BlockSpec("4.2", 4, "4.2 主要治疗药物分析", 900, ["头部通用名", "渠道差异", "品种生命周期", "结构优化"], "E08|E14|E15", "fig_4_3|fig_4_4"),
-            BlockSpec("4.3", 4, "4.3 市场格局与竞争态势", 900, ["集中度", "竞争壁垒", "挑战者路径", "效率竞争"], "E08|E14|E15", "fig_4_5|fig_4_8"),
+            BlockSpec("4.1", 4, "4.1 单品市场概况与渠道趋势", 900, ["渠道规模", "季度趋势", "结构占比", "增长驱动"], "E09|E10|E14", "fig_4_1|fig_4_2"),
+            BlockSpec("4.2", 4, "4.2 渠道表现与动销变化", 900, ["头部通用名", "渠道差异", "品种生命周期", "结构优化"], "E08|E14|E15", "fig_4_3|fig_4_4"),
+            BlockSpec("4.3", 4, "4.3 格局判断与渠道承接", 900, ["集中度", "竞争壁垒", "挑战者路径", "效率竞争"], "E08|E14|E15", "fig_4_5|fig_4_8"),
             BlockSpec("4.4", 4, "4.4 本章小结", 800, ["数据闭环", "经营动作", "跨部门协同", "季度复盘"], "E09|E10|E14", "fig_4_6|fig_4_7"),
             BlockSpec("5.1", 5, "5.1 患者群体结构与画像（性别/年龄/地域/职业负荷/用药偏好）", 1600, ["年龄结构", "就诊场景", "地区差异", "职业负荷", "负担分层"], "E04|E08|E13", "fig_5_1"),
             BlockSpec("5.2", 5, "5.2 医生处方偏好与诊疗习惯（路径差异/未满足需求）", 1600, ["处方偏好", "科室差异", "证据偏好", "未满足需求", "康复路径"], "E03|E05|E08", "fig_5_2|fig_5_4"),
@@ -2446,6 +2744,33 @@ def build_block_specs() -> List[BlockSpec]:
             BlockSpec("7.1", 7, "7.1 市场预测（方法-假设-情景）", 1700, ["需求预测", "规模外推", "渠道重构", "治疗演进", "敏感性"], "E08|E10|E12", "fig_7_1"),
             BlockSpec("7.2", 7, "7.2 战略建议（产品/证据/准入/渠道/生命周期）", 1700, ["产品定位", "证据策略", "准入策略", "渠道组合", "生命周期管理"], "E04|E10|E15", "fig_7_2"),
             BlockSpec("7.3", 7, "7.3 本章小结", 1000, ["增长判断", "资源配置", "执行优先级", "风险对冲"], "E10|E12|E15", ""),
+        ]
+    if is_functional_dyspepsia_profile():
+        return [
+            BlockSpec("1.1", 1, "1.1 疾病定义与 Rome IV 分型（PDS/EPS）", 1250, ["定义边界", "Rome IV 分型", "PDS/EPS", "病因排除", "临床分层"], "E01|E03|E14", "fig_1_1"),
+            BlockSpec("1.2", 1, "1.2 发病机制与脑肠轴异常（胃动力/高敏/微炎症）", 1250, ["脑肠轴", "胃适应性受损", "胃排空异常", "内脏高敏", "微炎症"], "E03|E04|E14", "fig_1_2|fig_1_3"),
+            BlockSpec("1.3", 1, "1.3 本章小结", 900, ["定义边界", "分型框架", "机制主线", "章节衔接"], "E01|E04|E14", "fig_1_4"),
+            BlockSpec("2.1", 2, "2.1 与脑肠轴、胃动力及情绪睡眠系统的关联", 1500, ["脑肠轴调控", "胃动力异常", "高敏感", "睡眠情绪", "系统交互"], "E03|E04|E06", "fig_2_1"),
+            BlockSpec("2.2", 2, "2.2 报警征象、重叠疾病与风险管理", 1500, ["报警征象", "器质性疾病排除", "Hp相关重叠", "焦虑抑郁重叠", "复查窗口"], "E01|E07|E08", "fig_2_2|fig_2_3"),
+            BlockSpec("2.3", 2, "2.3 本章小结", 1000, ["系统关联", "关键风险", "排除诊断", "复评边界"], "E01|E08|E14", ""),
+            BlockSpec("3.1", 3, "3.1 临床诊断标准与检查路径（Rome IV+报警征象）", 1600, ["症状筛查", "Rome IV", "报警征象", "内镜时机", "Hp检测"], "E01|E02|E08", "fig_3_1"),
+            BlockSpec("3.2", 3, "3.2 西医治疗体系（根除Hp/抑酸/促动力/神经调节）", 1600, ["test-and-treat", "抑酸", "促动力", "神经调节", "饮食干预"], "E01|E06|E08", "fig_3_2"),
+            BlockSpec("3.3", 3, "3.3 中医辨证路径与中西协同治疗", 1400, ["辨证分型", "治则治法", "中成药", "心理睡眠协同", "疗效终点"], "E03|E14|E15", "fig_3_3"),
+            BlockSpec("3.4", 3, "3.4 本章小结", 950, ["诊断路径", "治疗框架", "证据边界", "随访重点"], "E01|E08|E14", ""),
+            BlockSpec("4.1", 4, "4.1 市场口径定义与三端规模趋势", 900, ["口径定义", "品类范围", "季度趋势", "结构占比"], "E10|E11|E13", "fig_4_1|fig_4_2"),
+            BlockSpec("4.2", 4, "4.2 核心治疗品类与重点通用名", 900, ["品类结构", "头部通用名", "渠道差异", "价格带"], "E09|E11|E13", "fig_4_3|fig_4_4"),
+            BlockSpec("4.3", 4, "4.3 竞争格局与玩家地图（CR5/TOP10）", 900, ["CR5", "TOP10覆盖", "玩家分层", "竞争壁垒"], "E09|E13|E15", "fig_4_5|fig_4_8"),
+            BlockSpec("4.4", 4, "4.4 本章小结", 800, ["口径一致性", "核心发现", "竞争判断", "风险提示"], "E10|E11|E13", "fig_4_6|fig_4_7"),
+            BlockSpec("5.1", 5, "5.1 患者画像与症状分层（PDS/EPS/重叠焦虑）", 1600, ["年龄结构", "PDS/EPS", "情绪重叠", "就医路径", "用药偏好"], "E03|E09|E14", "fig_5_1"),
+            BlockSpec("5.2", 5, "5.2 处方路径与未满足临床需求", 1600, ["科室差异", "治疗目标", "症状波动", "未满足需求", "证据缺口"], "E01|E06|E12", "fig_5_2|fig_5_4"),
+            BlockSpec("5.3", 5, "5.3 长期管理与复诊依从（饮食/睡眠/复评）", 1400, ["饮食管理", "睡眠情绪", "复诊窗口", "院内外协同", "长期风险"], "E03|E06|E14", "fig_5_3"),
+            BlockSpec("5.4", 5, "5.4 本章小结", 900, ["人群结构", "症状分层", "依从要点", "长期管理"], "E06|E12|E14", ""),
+            BlockSpec("6.1", 6, "6.1 政策环境（全球与中国）", 1700, ["指南更新", "医保支付", "质量规范", "合规传播", "服务协同"], "E01|E10|E12", "fig_6_1"),
+            BlockSpec("6.2", 6, "6.2 监管趋势对品类与渠道的影响", 1700, ["审评审批", "说明书边界", "支付规则", "院内准入", "互联网规范"], "E10|E11|E15", "fig_6_2"),
+            BlockSpec("6.3", 6, "6.3 本章小结", 1000, ["政策主线", "监管边界", "支付约束", "趋势影响"], "E10|E11|E15", ""),
+            BlockSpec("7.1", 7, "7.1 市场预测（方法-假设-情景）", 1700, ["模型方法", "基准假设", "三情景预测", "敏感性", "风险变量"], "E09|E11|E13", "fig_7_1"),
+            BlockSpec("7.2", 7, "7.2 战略建议（产品/证据/准入/渠道）", 1700, ["产品定位", "证据策略", "准入策略", "渠道组合", "生命周期管理"], "E10|E11|E15", "fig_7_2"),
+            BlockSpec("7.3", 7, "7.3 本章小结", 1000, ["预测主线", "情景差异", "关键变量", "风险提示"], "E11|E13|E15", ""),
         ]
     if is_gastritis_profile():
         return [
@@ -2573,6 +2898,32 @@ def split_paragraphs(text: str) -> List[str]:
     return [p.strip() for p in text.split("\n\n") if p.strip()]
 
 
+def parse_explicit_heading3(paragraph: str) -> str:
+    raw = str(paragraph).strip()
+    match = INLINE_H3_RE.match(raw)
+    if match:
+        return f"{match.group('num')} {match.group('title').strip()}"
+    markdown_match = MARKDOWN_H3_RE.match(raw)
+    if markdown_match:
+        return markdown_match.group("title").strip()
+    return ""
+
+
+def build_block_render_elements(spec: BlockSpec, content: str) -> List[Tuple[str, str]]:
+    paragraphs = split_paragraphs(content)
+    if not paragraphs:
+        return []
+
+    elements: List[Tuple[str, str]] = []
+    for paragraph in paragraphs:
+        heading_text = parse_explicit_heading3(paragraph)
+        if heading_text:
+            elements.append(("heading3", heading_text))
+        else:
+            elements.append(("body", paragraph))
+    return elements
+
+
 def clean_title_prefix(subtitle: str, text: str) -> str:
     paras = split_paragraphs(text)
     if paras and paras[0].startswith(subtitle):
@@ -2632,6 +2983,13 @@ def build_semantic_figure_specs_template() -> Dict[str, Dict[str, object]]:
         fig31_nodes = ["首诊分层", "神经体征检查", "影像评估", "保守治疗", "复评分流", "介入/手术"]
         fig53_title = f"{DISEASE_NAME}全周期管理流程"
         fig53_nodes = ["症状识别", "初诊评估", "治疗启动", "复评调整", "复发预防", "长期随访"]
+    elif is_functional_dyspepsia_profile():
+        fig13_title = f"{DISEASE_NAME}病理生理演进路径"
+        fig13_nodes = ["脑肠轴失衡", "胃适应性受损", "胃排空异常", "内脏高敏", "餐后不适/上腹痛"]
+        fig31_title = f"{DISEASE_NAME}临床诊疗流程"
+        fig31_nodes = ["症状筛查", "报警征象判断", "Hp检测/内镜分流", "分型诊断", "治疗启动", "复评随访"]
+        fig53_title = f"{DISEASE_NAME}长期管理流程"
+        fig53_nodes = ["症状识别", "初诊分型", "治疗执行", "饮食/睡眠管理", "复评调整", "长期随访"]
     elif is_gastritis_profile():
         fig13_title = f"{DISEASE_NAME}病理演进链路"
         fig13_nodes = ["病因暴露", "慢性炎症", "腺体萎缩", "肠上皮化生", "风险升级"]
@@ -2866,24 +3224,432 @@ def make_manifest_files(specs: List[BlockSpec], fig_rows: List[Dict[str, str]]) 
     )
 
 
+def cleanup_stale_figure_outputs(fig_rows: List[Dict[str, str]]) -> None:
+    keep_names = {str(row.get("输出文件名", "")).strip() for row in fig_rows if str(row.get("输出文件名", "")).strip()}
+    for path in FIG_DIR.glob("fig_*.png"):
+        if path.name not in keep_names:
+            path.unlink(missing_ok=True)
+
+
 def setup_figure_style():
     plt.style.use("seaborn-v0_8-whitegrid")
-    # Re-apply Chinese-capable font settings after loading style.
-    matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "SimSun", "Microsoft JhengHei", "DejaVu Sans"]
-    matplotlib.rcParams["font.family"] = "sans-serif"
+    # Re-apply figure font settings after loading style.
+    body_font = fig_body_fontfamily()
+    body_size = fig_body_fontsize()
+    font_candidates = [
+        body_font,
+        *FIGURE_FONT_FAMILY_FALLBACKS,
+    ]
+    # Remove duplicates while preserving order.
+    seen = set()
+    font_stack = []
+    for font in font_candidates:
+        if font and font not in seen:
+            seen.add(font)
+            font_stack.append(font)
+    matplotlib.rcParams["font.sans-serif"] = font_stack
+    matplotlib.rcParams["font.family"] = [body_font]
+    matplotlib.rcParams["font.size"] = body_size
+    matplotlib.rcParams["axes.titlesize"] = body_size
+    matplotlib.rcParams["axes.labelsize"] = body_size
+    matplotlib.rcParams["xtick.labelsize"] = body_size
+    matplotlib.rcParams["ytick.labelsize"] = body_size
+    matplotlib.rcParams["legend.fontsize"] = body_size
+    matplotlib.rcParams["legend.title_fontsize"] = body_size
     matplotlib.rcParams["axes.unicode_minus"] = False
 
 
 def save_figure(path: Path, fig) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     backup_if_exists(path)
+    cur_w, cur_h = fig.get_size_inches()
+    if cur_w and abs(cur_w - DOCX_FIGURE_WIDTH_INCH) > 0.01:
+        new_h = max(2.2, cur_h * DOCX_FIGURE_WIDTH_INCH / cur_w)
+        fig.set_size_inches(DOCX_FIGURE_WIDTH_INCH, new_h, forward=True)
     tight_rect = getattr(fig, "_codex_tight_rect", None)
     if isinstance(tight_rect, (list, tuple)) and len(tight_rect) == 4:
         fig.tight_layout(rect=tight_rect)
     else:
         fig.tight_layout()
-    fig.savefig(path, dpi=220, bbox_inches="tight")
+    fig.savefig(path, dpi=FIGURE_RENDER_DPI)
     plt.close(fig)
+
+
+def _find_style_by_name(styles_root: ET.Element, name: str) -> ET.Element | None:
+    for style in styles_root.findall("w:style", _XML_NS):
+        style_name = style.find("w:name", _XML_NS)
+        if style_name is not None and style_name.get(_W_VAL) == name:
+            return style
+    return None
+
+
+def _resolve_theme_font(theme_root: ET.Element | None, theme_key: str) -> str | None:
+    if theme_root is None or not theme_key:
+        return None
+    key = theme_key.lower()
+    container = theme_root.find(".//a:minorFont", _XML_NS) if key.startswith("minor") else theme_root.find(".//a:majorFont", _XML_NS)
+    if container is None:
+        return None
+    if "eastasia" in key:
+        for font in container.findall("a:font", _XML_NS):
+            if font.get("script") == "Hans":
+                typeface = font.get("typeface")
+                if typeface:
+                    return typeface
+        east_asia = container.find("a:ea", _XML_NS)
+        if east_asia is not None:
+            typeface = east_asia.get("typeface")
+            if typeface:
+                return typeface
+        return None
+    latin = container.find("a:latin", _XML_NS)
+    if latin is not None:
+        typeface = latin.get("typeface")
+        if typeface:
+            return typeface
+    return None
+
+
+def _extract_rpr_font(rpr: ET.Element | None, theme_root: ET.Element | None) -> str | None:
+    if rpr is None:
+        return None
+    rfonts = rpr.find("w:rFonts", _XML_NS)
+    if rfonts is None:
+        return None
+    east_asia = rfonts.get(f"{{{_WORDML_NS}}}eastAsia")
+    if east_asia:
+        return east_asia
+    east_asia_theme = rfonts.get(f"{{{_WORDML_NS}}}eastAsiaTheme")
+    if east_asia_theme:
+        resolved = _resolve_theme_font(theme_root, east_asia_theme)
+        if resolved:
+            return resolved
+    ascii_font = rfonts.get(f"{{{_WORDML_NS}}}ascii") or rfonts.get(f"{{{_WORDML_NS}}}hAnsi")
+    if ascii_font:
+        return ascii_font
+    ascii_theme = rfonts.get(f"{{{_WORDML_NS}}}asciiTheme") or rfonts.get(f"{{{_WORDML_NS}}}hAnsiTheme")
+    if ascii_theme:
+        resolved = _resolve_theme_font(theme_root, ascii_theme)
+        if resolved:
+            return resolved
+    return None
+
+
+def _extract_rpr_size(rpr: ET.Element | None) -> float | None:
+    if rpr is None:
+        return None
+    for tag in ("w:sz", "w:szCs"):
+        node = rpr.find(tag, _XML_NS)
+        if node is None:
+            continue
+        val = node.get(_W_VAL)
+        if not val:
+            continue
+        try:
+            return float(val) / 2
+        except ValueError:
+            continue
+    return None
+
+
+def get_docx_body_font_spec() -> Tuple[str | None, float | None]:
+    global _DOCX_BODY_FONT_CACHE, _DOCX_BODY_FONT_CACHE_PATH
+    if _DOCX_BODY_FONT_CACHE is not None and _DOCX_BODY_FONT_CACHE_PATH == TEMPLATE_PATH:
+        return _DOCX_BODY_FONT_CACHE
+
+    font_name: str | None = None
+    size_pt: float | None = None
+    try:
+        with zipfile.ZipFile(TEMPLATE_PATH, "r") as zf:
+            styles_xml = zf.read("word/styles.xml")
+            theme_xml = zf.read("word/theme/theme1.xml") if "word/theme/theme1.xml" in zf.namelist() else None
+    except Exception:
+        _DOCX_BODY_FONT_CACHE_PATH = TEMPLATE_PATH
+        _DOCX_BODY_FONT_CACHE = (DOCX_BODY_FONT_FALLBACK, DOCX_BODY_FONT_SIZE_PT_FALLBACK)
+        return _DOCX_BODY_FONT_CACHE
+
+    try:
+        styles_root = ET.fromstring(styles_xml)
+    except Exception:
+        _DOCX_BODY_FONT_CACHE_PATH = TEMPLATE_PATH
+        _DOCX_BODY_FONT_CACHE = (DOCX_BODY_FONT_FALLBACK, DOCX_BODY_FONT_SIZE_PT_FALLBACK)
+        return _DOCX_BODY_FONT_CACHE
+
+    theme_root = None
+    if theme_xml:
+        try:
+            theme_root = ET.fromstring(theme_xml)
+        except Exception:
+            theme_root = None
+
+    styles_by_id: Dict[str, ET.Element] = {}
+    for style in styles_root.findall("w:style", _XML_NS):
+        style_id = style.get(_W_STYLEID)
+        if style_id:
+            styles_by_id[style_id] = style
+
+    style = _find_style_by_name(styles_root, DOCX_BODY_STYLE_NAME)
+    if style is None:
+        style = _find_style_by_name(styles_root, "Normal")
+    if style is None:
+        for candidate in styles_root.findall("w:style", _XML_NS):
+            if candidate.get(_W_DEFAULT) == "1" and candidate.get(_W_TYPE) == "paragraph":
+                style = candidate
+                break
+
+    def apply_rpr(rpr: ET.Element | None) -> None:
+        nonlocal font_name, size_pt
+        if rpr is None:
+            return
+        if font_name is None:
+            font_name = _extract_rpr_font(rpr, theme_root)
+        if size_pt is None:
+            size_pt = _extract_rpr_size(rpr)
+
+    def apply_style(style_el: ET.Element | None) -> None:
+        if style_el is None:
+            return
+        apply_rpr(style_el.find("w:rPr", _XML_NS))
+
+    apply_style(style)
+    if style is not None:
+        link_el = style.find("w:link", _XML_NS)
+        if link_el is not None:
+            link_id = link_el.get(_W_VAL)
+            if link_id:
+                apply_style(styles_by_id.get(link_id))
+
+    visited: set[str] = set()
+    current = style
+    while current is not None:
+        base_el = current.find("w:basedOn", _XML_NS)
+        if base_el is None:
+            break
+        base_id = base_el.get(_W_VAL)
+        if not base_id or base_id in visited:
+            break
+        visited.add(base_id)
+        current = styles_by_id.get(base_id)
+        apply_style(current)
+
+    defaults_rpr = styles_root.find("w:docDefaults/w:rPrDefault/w:rPr", _XML_NS)
+    apply_rpr(defaults_rpr)
+
+    if font_name is None:
+        font_name = DOCX_BODY_FONT_FALLBACK
+    if size_pt is None:
+        size_pt = DOCX_BODY_FONT_SIZE_PT_FALLBACK
+
+    _DOCX_BODY_FONT_CACHE_PATH = TEMPLATE_PATH
+    _DOCX_BODY_FONT_CACHE = (font_name, size_pt)
+    return _DOCX_BODY_FONT_CACHE
+
+
+def fig_body_fontfamily() -> str:
+    return FIGURE_FONT_FAMILY
+
+
+def fig_body_fontsize(fig_width_inch: float | None = None) -> float:
+    _ = fig_width_inch
+    return float(FIGURE_BODY_WORD_EQUIVALENT_FONT_PT)
+
+
+def fig_title_fontsize(fig_width_inch: float | None = None) -> float:
+    _ = fig_width_inch
+    return float(FIGURE_TITLE_WORD_EQUIVALENT_FONT_PT)
+
+
+def compute_source_footer_font_px(image_width_px: int, body_font_size_pt: float | None) -> int:
+    target_pt = body_font_size_pt or FIGURE_TITLE_WORD_EQUIVALENT_FONT_PT
+    if image_width_px <= 0:
+        return max(8, int(round(float(target_pt) * FIGURE_RENDER_DPI / 72.0)))
+    pixels = int(round(float(target_pt) * FIGURE_RENDER_DPI / 72.0))
+    return max(8, pixels)
+
+
+def resolve_source_footer_font_path(preferred_family: str | None = None) -> str | None:
+    cache_key = preferred_family or ""
+    cached = _SOURCE_FOOTER_FONT_PATH_CACHE.get(cache_key)
+    if cached is not None:
+        return cached or None
+    candidates = []
+    if preferred_family:
+        candidates.append(preferred_family)
+    candidates.extend(
+        [
+            "Microsoft YaHei",
+            "SimHei",
+            "SimSun",
+            "Microsoft JhengHei",
+            "Arial Unicode MS",
+            "DejaVu Sans",
+        ]
+    )
+    for family in candidates:
+        try:
+            path = font_manager.findfont(font_manager.FontProperties(family=family), fallback_to_default=False)
+        except Exception:
+            continue
+        if path and Path(path).exists():
+            _SOURCE_FOOTER_FONT_PATH_CACHE[cache_key] = path
+            return path
+    _SOURCE_FOOTER_FONT_PATH_CACHE[cache_key] = ""
+    return None
+
+
+def load_source_footer_font(
+    font_size_px: int,
+    preferred_family: str | None = None,
+) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
+    font_path = resolve_source_footer_font_path(preferred_family)
+    if font_path:
+        try:
+            return ImageFont.truetype(font_path, font_size_px)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
+def text_bbox_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont | ImageFont.FreeTypeFont) -> Tuple[int, int]:
+    if not text:
+        return 0, 0
+    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+    return max(0, right - left), max(0, bottom - top)
+
+
+def wrap_source_footer_lines(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont | ImageFont.FreeTypeFont,
+    max_width: int,
+) -> List[str]:
+    normalized = normalize_reference_line(text)
+    if not normalized:
+        return []
+    lines: List[str] = []
+    current = ""
+    for char in normalized:
+        candidate = f"{current}{char}"
+        if current and text_bbox_size(draw, candidate, font)[0] > max_width:
+            lines.append(current.rstrip())
+            current = char.lstrip()
+        else:
+            current = candidate
+    if current.strip():
+        lines.append(current.rstrip())
+    return lines or [normalized]
+
+
+def read_embedded_source_line(path: Path) -> str:
+    if not path.exists() or path.suffix.lower() != ".png":
+        return ""
+    try:
+        with Image.open(path) as img:
+            raw = str(img.info.get(FIGURE_SOURCE_METADATA_KEY, "")).strip()
+    except Exception:
+        return ""
+    return normalize_reference_line(raw)
+
+
+def embed_source_line_into_png(path: Path, source_line: str) -> None:
+    source_text = normalize_reference_line(source_line)
+    if not source_text:
+        return
+    if not path.exists() or path.suffix.lower() != ".png":
+        return
+
+    try:
+        with Image.open(path) as raw_img:
+            existing = normalize_reference_line(str(raw_img.info.get(FIGURE_SOURCE_METADATA_KEY, "")).strip())
+            embedded_flag = str(raw_img.info.get(FIGURE_SOURCE_EMBEDDED_KEY, "")).strip() == "1"
+            base = raw_img.convert("RGBA")
+            probe = Image.new("RGBA", (base.width, 64), (255, 255, 255, 255))
+            probe_draw = ImageDraw.Draw(probe)
+            body_font_family = FIGURE_FONT_FAMILY
+            body_font_size_pt = fig_title_fontsize(base.width / FIGURE_RENDER_DPI)
+            font_size_px = compute_source_footer_font_px(base.width, body_font_size_pt)
+            size_sig = f"{body_font_size_pt:.2f}" if body_font_size_pt is not None else ""
+            style_signature = f"{body_font_family or ''}|{size_sig}|{font_size_px}"
+            existing_style = str(raw_img.info.get(FIGURE_SOURCE_STYLE_METADATA_KEY, "")).strip()
+            if existing == source_text and embedded_flag and existing_style == style_signature:
+                return
+
+            font = load_source_footer_font(font_size_px, preferred_family=body_font_family)
+            max_text_width = max(240, int(base.width * 0.92))
+            lines = wrap_source_footer_lines(probe_draw, source_text, font, max_text_width)
+            _, line_text_height = text_bbox_size(probe_draw, "数据来源：Ag", font)
+            line_height = max(line_text_height + 8, font_size_px + 6)
+            top_padding = max(12, font_size_px // 2)
+            bottom_padding = max(12, font_size_px // 2)
+            separator_gap = 8
+            footer_height = top_padding + bottom_padding + separator_gap + line_height * len(lines)
+
+            canvas = Image.new("RGBA", (base.width, base.height + footer_height), (255, 255, 255, 255))
+            canvas.paste(base, (0, 0))
+            draw = ImageDraw.Draw(canvas)
+
+            separator_y = base.height + separator_gap
+            draw.line(
+                (int(base.width * 0.04), separator_y, int(base.width * 0.96), separator_y),
+                fill=(208, 213, 221, 255),
+                width=max(1, base.width // 500),
+            )
+
+            text_y = separator_y + top_padding
+            for line in lines:
+                line_width, _ = text_bbox_size(draw, line, font)
+                text_x = max(0, (base.width - line_width) // 2)
+                draw.text((text_x, text_y), line, font=font, fill=(0, 0, 0, 255))
+                text_y += line_height
+
+            pnginfo = PngImagePlugin.PngInfo()
+            for key, value in raw_img.info.items():
+                if key in {FIGURE_SOURCE_METADATA_KEY, FIGURE_SOURCE_EMBEDDED_KEY, FIGURE_SOURCE_STYLE_METADATA_KEY}:
+                    continue
+                if isinstance(key, str) and isinstance(value, str):
+                    pnginfo.add_text(key, value)
+            pnginfo.add_text(FIGURE_SOURCE_METADATA_KEY, source_text)
+            pnginfo.add_text(FIGURE_SOURCE_EMBEDDED_KEY, "1")
+            pnginfo.add_text(FIGURE_SOURCE_STYLE_METADATA_KEY, style_signature)
+
+            tmp_path = path.with_name(f"{path.stem}.codex_tmp.png")
+            canvas.save(tmp_path, format="PNG", pnginfo=pnginfo)
+    except Exception:
+        return
+
+    tmp_path.replace(path)
+
+
+def ensure_figure_source_footers(fig_rows: List[Dict[str, str]]) -> None:
+    for row in fig_rows:
+        file_name = str(row.get("输出文件名", "")).strip()
+        source_line = str(row.get("source_line", "")).strip()
+        if not file_name or not source_line:
+            continue
+        embed_source_line_into_png(FIG_DIR / file_name, source_line)
+
+
+def collect_figure_source_footer_issues(fig_rows: List[Dict[str, str]]) -> Tuple[List[str], List[str], List[str]]:
+    missing_source_line: List[str] = []
+    missing_embedded_source: List[str] = []
+    mismatched_embedded_source: List[str] = []
+    for row in fig_rows:
+        fig_id = str(row.get("fig_id", "")).strip() or "UNKNOWN"
+        file_name = str(row.get("输出文件名", "")).strip()
+        source_line = normalize_reference_line(str(row.get("source_line", "")).strip())
+        if not source_line:
+            missing_source_line.append(fig_id)
+            continue
+        if not file_name:
+            missing_embedded_source.append(fig_id)
+            continue
+        embedded_source = read_embedded_source_line(FIG_DIR / file_name)
+        if not embedded_source:
+            missing_embedded_source.append(fig_id)
+            continue
+        if embedded_source != source_line:
+            mismatched_embedded_source.append(fig_id)
+    return missing_source_line, missing_embedded_source, mismatched_embedded_source
 
 
 def estimate_flow_box_width(
@@ -3003,52 +3769,71 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
     n_nodes = max(len(nodes), 1)
 
     if direction == "lr":
+        labels = [wrap_flow_label(text, max_visual_per_line=7.2) for text in nodes]
+        widths = [estimate_flow_box_width(text, min_width=0.12, max_width=0.22, base=0.07, char_step=0.0058) for text in labels]
         left_margin = 0.04
-        labels, widths, gap = layout_horizontal_flow_nodes(
-            nodes,
-            left_margin=left_margin,
-            right_margin=0.04,
-            min_gap=0.082 if n_nodes >= 5 else 0.095,
-            max_gap=0.15,
-            min_width=0.105,
-            max_width=0.185,
-            base=0.062,
-            char_step=0.0064,
-        )
-        available = 1.0 - left_margin - 0.04
-        total_width = sum(widths) + gap * max(0, n_nodes - 1)
-
         anchors: List[Dict[str, Tuple[float, float]]] = []
-        cursor = left_margin + max(0.0, (available - total_width) / 2.0)
-        for width, text in zip(widths, labels):
-            x = cursor + width / 2.0
-            anchors.append(
-                draw_box_node(
-                    ax,
-                    x,
-                    0.50,
-                    text,
-                    width=width,
-                    height=flow_box_height(text, 0.118),
-                    fc="#E6F2FF",
-                    ec=color,
-                    lw=1.2,
-                    fontsize=8.9 if "\n" in text else 9.2,
-                )
-            )
-            cursor += width + gap
+        available = 1.0 - left_margin - 0.04
+        use_two_rows = n_nodes >= 5 or (sum(widths) + 0.075 * max(0, n_nodes - 1) > available)
+        if use_two_rows:
+            fig.set_size_inches(fig.get_figwidth(), max(fig.get_figheight(), fig.get_figwidth() * 0.56), forward=True)
+            split = math.ceil(n_nodes / 2)
+            top_labels = labels[:split]
+            top_widths = widths[:split]
+            bottom_labels = labels[split:]
+            bottom_widths = widths[split:]
 
-        for i in range(len(anchors) - 1):
-            src = anchors[i]["east"]
-            dst = anchors[i + 1]["west"]
-            draw_poly_arrow(
-                ax,
-                [src, dst],
-                color=color,
-                lw=1.6,
-                shrink_start_pts=10.0,
-                shrink_end_pts=10.0,
-            )
+            top_gap = max(0.05, min(0.10, (available - sum(top_widths)) / max(1, len(top_widths) - 1))) if len(top_widths) > 1 else 0.0
+            bottom_gap = max(0.05, min(0.10, (available - sum(bottom_widths)) / max(1, len(bottom_widths) - 1))) if len(bottom_widths) > 1 else 0.0
+
+            top_total = sum(top_widths) + top_gap * max(0, len(top_widths) - 1)
+            cursor = left_margin + max(0.0, (available - top_total) / 2.0)
+            top_anchors: List[Dict[str, Tuple[float, float]]] = []
+            for width, text in zip(top_widths, top_labels):
+                x = cursor + width / 2.0
+                top_anchors.append(draw_box_node(ax, x, 0.70, text, width=width, height=flow_box_height(text, 0.11), fc="#E6F2FF", ec=color, lw=1.2, fontsize=fig_body_fontsize()))
+                cursor += width + top_gap
+
+            for i in range(len(top_anchors) - 1):
+                draw_poly_arrow(ax, [top_anchors[i]["east"], top_anchors[i + 1]["west"]], color=color, lw=1.6, shrink_start_pts=10.0, shrink_end_pts=10.0)
+
+            bottom_anchors: List[Dict[str, Tuple[float, float]]] = []
+            if bottom_labels:
+                bottom_total = sum(bottom_widths) + bottom_gap * max(0, len(bottom_widths) - 1)
+                cursor = 1.0 - 0.04 - max(0.0, (available - bottom_total) / 2.0)
+                for width, text in zip(bottom_widths, bottom_labels):
+                    x = cursor - width / 2.0
+                    bottom_anchors.append(draw_box_node(ax, x, 0.28, text, width=width, height=flow_box_height(text, 0.11), fc="#E6F2FF", ec=color, lw=1.2, fontsize=fig_body_fontsize()))
+                    cursor -= width + bottom_gap
+
+                for i in range(len(bottom_anchors) - 1):
+                    draw_poly_arrow(ax, [bottom_anchors[i]["west"], bottom_anchors[i + 1]["east"]], color=color, lw=1.6, shrink_start_pts=10.0, shrink_end_pts=10.0)
+
+                elbow_y = 0.49
+                draw_poly_arrow(
+                    ax,
+                    [
+                        top_anchors[-1]["south"],
+                        (top_anchors[-1]["south"][0], elbow_y),
+                        (bottom_anchors[0]["north"][0], elbow_y),
+                        bottom_anchors[0]["north"],
+                    ],
+                    color=color,
+                    lw=1.6,
+                    shrink_start_pts=10.0,
+                    shrink_end_pts=10.0,
+                )
+        else:
+            gap = max(0.075, min(0.12, (available - sum(widths)) / max(1, n_nodes - 1))) if n_nodes > 1 else 0.0
+            total_width = sum(widths) + gap * max(0, n_nodes - 1)
+            cursor = left_margin + max(0.0, (available - total_width) / 2.0)
+            for width, text in zip(widths, labels):
+                x = cursor + width / 2.0
+                anchors.append(draw_box_node(ax, x, 0.50, text, width=width, height=flow_box_height(text, 0.118), fc="#E6F2FF", ec=color, lw=1.2, fontsize=fig_body_fontsize()))
+                cursor += width + gap
+
+            for i in range(len(anchors) - 1):
+                draw_poly_arrow(ax, [anchors[i]["east"], anchors[i + 1]["west"]], color=color, lw=1.6, shrink_start_pts=10.0, shrink_end_pts=10.0)
     else:
         labels = [wrap_flow_label(text) for text in nodes]
         heights = [estimate_flow_box_width(text, min_width=0.13, max_width=0.22) * 0.72 + (0.03 if "\n" in text else 0.0) for text in labels]
@@ -3063,7 +3848,7 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
         cursor = 0.91
         for height, text in zip(heights, labels):
             y = cursor - height / 2.0
-            anchors.append(draw_box_node(ax, 0.50, y, text, width=0.30, height=height, fc="#E6F2FF", ec=color, lw=1.2, fontsize=8.9 if "\n" in text else 9.2))
+            anchors.append(draw_box_node(ax, 0.50, y, text, width=0.30, height=height, fc="#E6F2FF", ec=color, lw=1.2, fontsize=fig_body_fontsize()))
             cursor -= height + gap
 
         for i in range(len(anchors) - 1):
@@ -3078,30 +3863,44 @@ def draw_simple_flow(path: Path, title: str, nodes: List[str], direction: str = 
                 shrink_end_pts=10.0,
             )
 
-    ax.set_title(normalize_disease_text(title), fontsize=12, pad=10, fontweight="bold")
+    font_path = resolve_source_footer_font_path(FIGURE_FONT_FAMILY)
+    title_size = fig_title_fontsize(figsize[0])
+    title_kwargs = {"fontsize": title_size, "pad": 10, "fontweight": "bold"}
+    if font_path:
+        title_kwargs["fontproperties"] = font_manager.FontProperties(fname=font_path, size=title_size, weight="bold")
+    else:
+        title_kwargs["fontfamily"] = FIGURE_FONT_FAMILY
+    ax.set_title(normalize_disease_text(title), **title_kwargs)
     save_figure(path, fig)
 
 
 def draw_pie_with_leaders(path: Path, title: str, labels: List[str], values: List[float], colors: List[str], figsize=(7.6, 4.6)) -> None:
     fig, ax = plt.subplots(figsize=figsize)
-    wedges, _ = ax.pie(values, labels=None, startangle=90, colors=colors, wedgeprops={"linewidth": 1, "edgecolor": "white"})
+    wedges, _ = ax.pie(
+        values,
+        labels=None,
+        startangle=90,
+        colors=colors,
+        radius=0.92,
+        wedgeprops={"linewidth": 1, "edgecolor": "white"},
+    )
     ax.axis("equal")
 
-    def distribute_side(items: List[Dict[str, float]], low: float = -1.18, high: float = 1.18, min_gap: float = 0.12) -> List[float]:
+    def distribute_side(items: List[Dict[str, float]], low: float = -1.05, high: float = 1.05, min_gap: float = 0.18) -> List[float]:
         if not items:
             return []
-        items = sorted(items, key=lambda item: item["target_y"])
+        items = sorted(items, key=lambda item: item["target_y"], reverse=True)
         ys = [max(low, min(high, item["target_y"])) for item in items]
         for idx in range(1, len(ys)):
-            ys[idx] = max(ys[idx], ys[idx - 1] + min_gap)
-        overflow = ys[-1] - high
-        if overflow > 0:
-            ys = [y - overflow for y in ys]
-        for idx in range(len(ys) - 2, -1, -1):
-            ys[idx] = min(ys[idx], ys[idx + 1] - min_gap)
-        underflow = low - ys[0]
+            ys[idx] = min(ys[idx], ys[idx - 1] - min_gap)
+        underflow = low - ys[-1]
         if underflow > 0:
             ys = [y + underflow for y in ys]
+        for idx in range(len(ys) - 2, -1, -1):
+            ys[idx] = max(ys[idx], ys[idx + 1] + min_gap)
+        overflow = ys[0] - high
+        if overflow > 0:
+            ys = [y - overflow for y in ys]
         return ys
 
     annotations: List[Dict[str, object]] = []
@@ -3115,59 +3914,87 @@ def draw_pie_with_leaders(path: Path, title: str, labels: List[str], values: Lis
                 "x": x,
                 "y": y,
                 "side": 1 if x >= 0 else -1,
-                "target_y": 1.16 * y,
+                "target_y": 1.08 * y,
             }
         )
 
-    right_items = [item for item in annotations if int(item["side"]) > 0]
-    left_items = [item for item in annotations if int(item["side"]) < 0]
-    right_y = distribute_side(right_items)
-    left_y = distribute_side(left_items)
+    right_items = sorted([item for item in annotations if int(item["side"]) > 0], key=lambda item: item["target_y"], reverse=True)
+    left_items = sorted([item for item in annotations if int(item["side"]) < 0], key=lambda item: item["target_y"], reverse=True)
 
-    for item, adjusted_y in zip(right_items, right_y):
-        item["adjusted_y"] = adjusted_y
-    for item, adjusted_y in zip(left_items, left_y):
-        item["adjusted_y"] = adjusted_y
-
-    for item in annotations:
-        idx = int(item["index"])
-        x = float(item["x"])
-        y = float(item["y"])
-        side = int(item["side"])
-        adjusted_y = float(item.get("adjusted_y", 1.16 * y))
-        label = f"{normalize_disease_text(labels[idx])} {values[idx]:.1f}%"
-        ax.annotate(
-            label,
-            xy=(x * 0.82, y * 0.82),
-            xytext=(1.34 * side, adjusted_y),
-            ha="left" if side > 0 else "right",
-            va="center",
-            fontsize=8.7,
-            arrowprops=dict(
-                arrowstyle="-",
+    def draw_side(items: List[Dict[str, object]], side: int) -> None:
+        adjusted = distribute_side(items)
+        for item, adjusted_y in zip(items, adjusted):
+            idx = int(item["index"])
+            x = float(item["x"])
+            y = float(item["y"])
+            label = f"{normalize_disease_text(labels[idx])} {values[idx]:.1f}%"
+            start = (x * 0.83, y * 0.83)
+            elbow_x = 1.03 * side
+            end_x = 1.22 * side
+            ax.plot(
+                [start[0], elbow_x, end_x],
+                [start[1], adjusted_y, adjusted_y],
                 color="#444444",
                 lw=0.9,
-                shrinkA=0,
-                shrinkB=0,
-                connectionstyle="arc3,rad=0",
-            ),
-        )
+                solid_capstyle="round",
+            )
+            ax.text(
+                end_x + (0.03 if side > 0 else -0.03),
+                adjusted_y,
+                label,
+                ha="left" if side > 0 else "right",
+                va="center",
+                fontsize=fig_body_fontsize(),
+            )
 
-    ax.set_title(normalize_disease_text(title), fontsize=12, fontweight="bold")
+    draw_side(left_items, -1)
+    draw_side(right_items, 1)
+
+    ax.set_xlim(-1.52, 1.52)
+    ax.set_ylim(-1.18, 1.18)
+
+    font_path = resolve_source_footer_font_path(FIGURE_FONT_FAMILY)
+    title_kwargs = {"fontsize": fig_title_fontsize(figsize[0]), "fontweight": "bold"}
+    if font_path:
+        title_kwargs["fontproperties"] = font_manager.FontProperties(
+            fname=font_path,
+            size=fig_title_fontsize(figsize[0]),
+            weight="bold",
+        )
+    else:
+        title_kwargs["fontfamily"] = FIGURE_FONT_FAMILY
+    ax.set_title(normalize_disease_text(title), **title_kwargs)
     save_figure(path, fig)
 
 
 def draw_policy_timeline(path: Path, title: str, events: List[Tuple[str, str]], figsize=(8.2, 3.0)) -> None:
     fig, ax = plt.subplots(figsize=figsize)
-    ax.set_xlim(0, len(events) + 1)
-    ax.set_ylim(0, 1)
+    ax.set_xlim(0.5, len(events) + 0.5)
+    ax.set_ylim(0, 1.02)
     ax.axis("off")
-    ax.hlines(0.5, 0.8, len(events) + 0.2, color="#2C5282", lw=2.0)
+    line_y = 0.56
+    ax.hlines(line_y, 0.8, len(events) + 0.2, color="#2C5282", lw=2.0)
+    body_size = max(FIGURE_BODY_FONT_PT_MIN, min(9.0, fig_body_fontsize(figsize[0]) - 2.2))
+    year_size = max(body_size + 1.0, 10.0)
     for idx, (year, txt) in enumerate(events, start=1):
-        ax.plot(idx, 0.5, "o", color="#2C5282")
-        ax.text(idx, 0.62, year, ha="center", va="bottom", fontsize=9, fontweight="bold")
-        ax.text(idx, 0.36, normalize_disease_text(txt), ha="center", va="top", fontsize=8, wrap=True)
-    ax.set_title(normalize_disease_text(title), fontsize=12, fontweight="bold", pad=8)
+        ax.plot(idx, line_y, "o", color="#2C5282")
+        ax.text(idx, 0.69, year, ha="center", va="bottom", fontsize=year_size, fontweight="bold")
+        wrapped = wrap_flow_label(txt, max_visual_per_line=5.8)
+        label_y = 0.40 if idx % 2 else 0.17
+        top_y = label_y + 0.03
+        ax.vlines(idx, line_y, top_y, color="#A0AEC0", lw=0.9)
+        ax.text(idx, label_y, normalize_disease_text(wrapped), ha="center", va="top", fontsize=body_size)
+    font_path = resolve_source_footer_font_path(FIGURE_FONT_FAMILY)
+    title_kwargs = {"fontsize": fig_title_fontsize(figsize[0]), "fontweight": "bold", "pad": 8}
+    if font_path:
+        title_kwargs["fontproperties"] = font_manager.FontProperties(
+            fname=font_path,
+            size=fig_title_fontsize(figsize[0]),
+            weight="bold",
+        )
+    else:
+        title_kwargs["fontfamily"] = FIGURE_FONT_FAMILY
+    ax.set_title(normalize_disease_text(title), **title_kwargs)
     save_figure(path, fig)
 
 
@@ -3181,8 +4008,9 @@ def draw_box_node(
     fc: str = "#EDF2F7",
     ec: str = "#2D3748",
     lw: float = 1.1,
-    fontsize: float = 9.5,
+    fontsize: float | None = None,
 ) -> Dict[str, Tuple[float, float]]:
+    fontsize = fig_body_fontsize()
     box = FancyBboxPatch(
         (x - width / 2, y - height / 2),
         width,
@@ -3271,9 +4099,9 @@ def draw_fig23_layered_path(ax, cfg: Dict[str, object]) -> None:
     center_title = render_disease_template(str(cfg.get("center_title", "核心病理/修复过程")).strip())
     right_title = render_disease_template(str(cfg.get("right_title", "临床后果与管理结果")).strip())
 
-    ax.text(0.18, 0.92, left_title, ha="center", va="center", fontsize=10, fontweight="bold")
-    ax.text(0.50, 0.92, center_title, ha="center", va="center", fontsize=10, fontweight="bold")
-    ax.text(0.82, 0.92, right_title, ha="center", va="center", fontsize=10, fontweight="bold")
+    ax.text(0.18, 0.92, left_title, ha="center", va="center", fontsize=fig_body_fontsize(), fontweight="bold")
+    ax.text(0.50, 0.92, center_title, ha="center", va="center", fontsize=fig_body_fontsize(), fontweight="bold")
+    ax.text(0.82, 0.92, right_title, ha="center", va="center", fontsize=fig_body_fontsize(), fontweight="bold")
 
     left_nodes_raw = cfg.get("left_nodes", [])
     right_nodes_raw = cfg.get("right_nodes", [])
@@ -3292,10 +4120,47 @@ def draw_fig23_layered_path(ax, cfg: Dict[str, object]) -> None:
     right_anchors: List[Dict[str, Tuple[float, float]]] = []
 
     for y, text in zip(left_y, left_nodes):
-        left_anchors.append(draw_box_node(ax, 0.18, float(y), text, width=0.24, height=0.12, fc="#EDF2F7", ec="#2D3748", lw=1.1, fontsize=9.0))
-    core_anchor = draw_box_node(ax, 0.50, 0.50, core_label, width=0.28, height=0.16, fc="#FEEBC8", ec="#C05621", lw=1.2, fontsize=9.0)
+        left_anchors.append(
+            draw_box_node(
+                ax,
+                0.18,
+                float(y),
+                text,
+                width=0.24,
+                height=0.12,
+                fc="#EDF2F7",
+                ec="#2D3748",
+                lw=1.1,
+                fontsize=fig_body_fontsize(),
+            )
+        )
+    core_anchor = draw_box_node(
+        ax,
+        0.50,
+        0.50,
+        core_label,
+        width=0.28,
+        height=0.16,
+        fc="#FEEBC8",
+        ec="#C05621",
+        lw=1.2,
+        fontsize=fig_body_fontsize(),
+    )
     for y, text in zip(right_y, right_nodes):
-        right_anchors.append(draw_box_node(ax, 0.82, float(y), text, width=0.24, height=0.12, fc="#EDF2F7", ec="#2D3748", lw=1.1, fontsize=9.0))
+        right_anchors.append(
+            draw_box_node(
+                ax,
+                0.82,
+                float(y),
+                text,
+                width=0.24,
+                height=0.12,
+                fc="#EDF2F7",
+                ec="#2D3748",
+                lw=1.1,
+                fontsize=fig_body_fontsize(),
+            )
+        )
 
     for anchor in left_anchors:
         src = anchor["east"]
@@ -3311,7 +4176,7 @@ def draw_fig23_layered_path(ax, cfg: Dict[str, object]) -> None:
         points = [(src[0] + 0.018, src[1]), (mid_x, src[1]), (mid_x, dst[1]), (dst[0] - 0.012, dst[1])]
         draw_poly_arrow(ax, points, color="#2B6CB0", lw=1.25)
 
-    ax.text(0.50, 0.08, "注：本图采用分层路径表达，替代高密度关系网络，以避免线条覆盖文本框。", ha="center", va="center", fontsize=8.2, color="#4A5568")
+    ax.text(0.50, 0.08, "注：本图采用分层路径表达，替代高密度关系网络，以避免线条覆盖文本框。", ha="center", va="center", fontsize=fig_body_fontsize(), color="#4A5568")
 
 
 def draw_configured_network_panel(ax, panel_cfg: Dict[str, object], default_edge_color: str = "#2B6CB0") -> None:
@@ -3335,7 +4200,7 @@ def draw_configured_network_panel(ax, panel_cfg: Dict[str, object], default_edge
             fc = str(node.get("fc", "#EDF2F7")).strip() or "#EDF2F7"
             ec = str(node.get("ec", "#2D3748")).strip() or "#2D3748"
             lw = float(node.get("lw", 1.1))
-            fontsize = float(node.get("fontsize", 9.5))
+            fontsize = float(node.get("fontsize", fig_body_fontsize()))
             node_map[node_id] = draw_box_node(ax, x, y, label, width=width, height=height, fc=fc, ec=ec, lw=lw, fontsize=fontsize)
 
     if isinstance(edges_cfg, list):
@@ -3381,7 +4246,7 @@ def draw_configured_network_panel(ax, panel_cfg: Dict[str, object], default_edge
                     sign_x,
                     sign_y,
                     sign,
-                    fontsize=float(edge.get("sign_fontsize", 8.5)),
+                    fontsize=fig_body_fontsize(),
                     color=color,
                     fontweight="bold",
                     ha="center",
@@ -3392,7 +4257,7 @@ def draw_configured_network_panel(ax, panel_cfg: Dict[str, object], default_edge
     title = render_disease_template(str(panel_cfg.get("title", "")).strip().replace("\\n", "\n"))
     if title:
         title_y = float(panel_cfg.get("title_y", 1.02))
-        ax.text(0.5, title_y, title, transform=ax.transAxes, ha="center", va="bottom", fontsize=10, fontweight="bold")
+        ax.text(0.5, title_y, title, transform=ax.transAxes, ha="center", va="bottom", fontsize=fig_body_fontsize(), fontweight="bold")
 
 
 
@@ -3401,7 +4266,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     fig_rows: List[Dict[str, str]] = []
     rendered_title_rows: List[Dict[str, str]] = []
     figure_specs = load_figure_specs()
-    block_spec_map = {s.block_id: s for s in build_block_specs()}
+    block_spec_map = {s.block_id: s for s in runtime_block_specs()}
     evidence_rows, _ = parse_evidence_pool(OUT_ROOT / "00_evidence.txt")
     evidence_map = {str(row.get("evidence_id", "")).strip(): row for row in evidence_rows if str(row.get("evidence_id", "")).strip()}
 
@@ -3623,6 +4488,13 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
 
     def set_main_title(ax, fig_id: str, title: str, **kwargs):
         txt = spec_text(fig_id, "title", title)
+        title_size = fig_title_fontsize()
+        kwargs["fontsize"] = title_size
+        font_path = resolve_source_footer_font_path(FIGURE_FONT_FAMILY)
+        if font_path:
+            kwargs["fontproperties"] = font_manager.FontProperties(fname=font_path, size=title_size)
+        else:
+            kwargs["fontfamily"] = FIGURE_FONT_FAMILY
         ax.set_title(txt, **kwargs)
         rendered_title_rows.append(
             {
@@ -3633,6 +4505,13 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
 
     def set_main_suptitle(fig, fig_id: str, title: str, **kwargs):
         txt = spec_text(fig_id, "title", title)
+        title_size = fig_title_fontsize(fig.get_figwidth())
+        kwargs["fontsize"] = title_size
+        font_path = resolve_source_footer_font_path(FIGURE_FONT_FAMILY)
+        if font_path:
+            kwargs["fontproperties"] = font_manager.FontProperties(fname=font_path, size=title_size)
+        else:
+            kwargs["fontfamily"] = FIGURE_FONT_FAMILY
         fig.suptitle(txt, **kwargs)
         rendered_title_rows.append(
             {
@@ -3651,6 +4530,15 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         flow_nodes = ["椎间盘退变", "椎体边缘骨赘", "椎管/椎间孔狭窄", "神经结构受压", "疼痛与功能障碍"]
         drivers = ["老龄化与久坐", "影像筛查普及", "康复需求", "门诊量增长", "指南更新"]
         score = [82, 71, 78, 69, 74]
+    elif is_functional_dyspepsia_profile():
+        cls = ["PDS型", "EPS型", "PDS/EPS重叠型", "伴睡眠情绪负担型", "需排除器质性疾病型"]
+        vals = [39, 23, 18, 12, 8]
+        stages = ["症状出现", "分型评估", "治疗启动", "长期管理"]
+        means = [74, 69, 61, 57]
+        flow_title = f"{DISEASE_NAME}病理生理演进路径"
+        flow_nodes = ["脑肠轴失衡", "胃适应性受损", "胃排空异常", "内脏高敏", "餐后不适/上腹痛"]
+        drivers = ["就医需求增长", "院内诊断分流", "院外续方承接", "数字教育触达", "指南更新"]
+        score = [76, 72, 67, 63, 70]
     elif is_gastritis_profile():
         cls = ["Hp相关胃炎", "NSAIDs相关", "胆汁反流相关", "自身免疫相关", "其他病因"]
         vals = [42, 18, 15, 9, 16]
@@ -3744,6 +4632,29 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
             ("睡眠系统", "心理行为", -0.08),
             ("内分泌代谢", "肌肉骨骼系统", 0.18),
             ("心理行为", "神经系统", 0.14),
+        ]
+    elif is_functional_dyspepsia_profile():
+        systems = ["脑肠轴", "胃动力系统", "内脏高敏系统", "低度炎症系统", "睡眠情绪系统", "饮食生活方式"]
+        influence = [92, 88, 84, 63, 74, 69]
+        xlabels = ["报警征象", "体重下降", "贫血/黑便", "夜间痛醒", "反复呕吐"]
+        ylabels = ["低风险", "中风险", "高风险"]
+        matrix = np.array([[0.28, 0.21, 0.18, 0.24, 0.22], [0.48, 0.44, 0.41, 0.47, 0.45], [0.24, 0.35, 0.41, 0.29, 0.33]])
+        pos = {
+            "脑肠轴": (0.18, 0.78),
+            "胃动力系统": (0.50, 0.78),
+            "内脏高敏系统": (0.82, 0.78),
+            "低度炎症系统": (0.18, 0.28),
+            "睡眠情绪系统": (0.50, 0.28),
+            "饮食生活方式": (0.82, 0.28),
+        }
+        edges = [
+            ("脑肠轴", "胃动力系统", 0.10),
+            ("脑肠轴", "睡眠情绪系统", -0.08),
+            ("胃动力系统", "饮食生活方式", 0.06),
+            ("内脏高敏系统", "睡眠情绪系统", 0.08),
+            ("低度炎症系统", "内脏高敏系统", -0.10),
+            ("饮食生活方式", "胃动力系统", -0.12),
+            ("睡眠情绪系统", "脑肠轴", 0.04),
         ]
     elif is_gastritis_profile():
         systems = ["消化系统", "免疫系统", "神经系统", "内分泌系统", "胃肠微生态", "血液系统"]
@@ -3867,7 +4778,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     ax.set_yticklabels(ylabels)
     for i in range(matrix.shape[0]):
         for j in range(matrix.shape[1]):
-            ax.text(j, i, f"{matrix[i, j]*100:.0f}%", ha="center", va="center", fontsize=8)
+            ax.text(j, i, f"{matrix[i, j]*100:.0f}%", ha="center", va="center", fontsize=fig_body_fontsize())
     set_main_title(ax, "fig_2_2", "图表2-2：常见并发风险矩阵")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     save_figure(FIG_DIR / "fig_2_2.png", fig)
@@ -3880,26 +4791,36 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         ax.set_ylim(0, 1)
         ax.axis("off")
 
-        ax.text(0.5, 0.95, "病因与调节层", ha="center", va="center", fontsize=10, color="#2D3748")
-        ax.text(0.5, 0.73, "核心病理层", ha="center", va="center", fontsize=10, color="#2D3748")
-        ax.text(0.5, 0.47, "机制传导层", ha="center", va="center", fontsize=10, color="#2D3748")
-        ax.text(0.5, 0.18, "临床后果层", ha="center", va="center", fontsize=10, color="#2D3748")
+        ax.text(0.5, 0.95, "病因与调节层", ha="center", va="center", fontsize=fig_body_fontsize(), color="#2D3748")
+        ax.text(0.5, 0.73, "核心病理层", ha="center", va="center", fontsize=fig_body_fontsize(), color="#2D3748")
+        ax.text(0.5, 0.47, "机制传导层", ha="center", va="center", fontsize=fig_body_fontsize(), color="#2D3748")
+        ax.text(0.5, 0.18, "临床后果层", ha="center", va="center", fontsize=fig_body_fontsize(), color="#2D3748")
 
         nodes = {
-            "Hp感染": draw_box_node(ax, 0.12, 0.85, "Hp感染", width=0.16, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=9.2),
-            "化学/药物刺激": draw_box_node(ax, 0.30, 0.85, "化学/药物刺激", width=0.18, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=9.2),
-            "胃肠微生态失衡": draw_box_node(ax, 0.48, 0.85, "胃肠微生态失衡", width=0.18, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=9.2),
-            "神经系统": draw_box_node(ax, 0.66, 0.85, "神经系统\n(脑-肠轴)", width=0.16, height=0.095, fc="#EBF8FF", ec="#2B6CB0", fontsize=9.0),
-            "内分泌系统": draw_box_node(ax, 0.84, 0.85, "内分泌系统", width=0.16, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=9.2),
-            "免疫系统": draw_box_node(ax, 0.28, 0.66, "免疫系统", width=0.14, height=0.085, fc="#E6FFFA", ec="#2C7A7B", fontsize=9.2),
-            "核心": draw_box_node(ax, 0.50, 0.66, "慢性胃炎\n(胃黏膜炎症)", width=0.22, height=0.10, fc="#FEEBC8", ec="#C05621", fontsize=9.8),
-            "黏膜屏障": draw_box_node(ax, 0.72, 0.66, "胃黏膜屏障受损", width=0.18, height=0.085, fc="#FEEBC8", ec="#C05621", fontsize=9.1),
-            "酸动力": draw_box_node(ax, 0.34, 0.42, "胃酸/胃动力异常", width=0.18, height=0.085, fc="#FFF5F5", ec="#C53030", fontsize=9.1),
-            "炎症持续": draw_box_node(ax, 0.50, 0.42, "慢性炎症持续", width=0.16, height=0.085, fc="#FFF5F5", ec="#C53030", fontsize=9.1),
-            "修复障碍": draw_box_node(ax, 0.66, 0.42, "黏膜修复障碍", width=0.16, height=0.085, fc="#FFF5F5", ec="#C53030", fontsize=9.1),
-            "症状负担": draw_box_node(ax, 0.28, 0.12, "症状负担", width=0.14, height=0.08, fc="#FAF5FF", ec="#6B46C1", fontsize=9.0),
-            "营养/贫血风险": draw_box_node(ax, 0.50, 0.12, "营养吸收受限\n/贫血风险", width=0.20, height=0.09, fc="#FAF5FF", ec="#6B46C1", fontsize=8.8),
-            "癌前病变风险": draw_box_node(ax, 0.72, 0.12, "癌前病变风险", width=0.16, height=0.08, fc="#FAF5FF", ec="#6B46C1", fontsize=9.0),
+            "Hp感染": draw_box_node(ax, 0.12, 0.85, "Hp感染", width=0.16, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=fig_body_fontsize()),
+            "化学/药物刺激": draw_box_node(ax, 0.30, 0.85, "化学/药物刺激", width=0.18, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=fig_body_fontsize()),
+            "胃肠微生态失衡": draw_box_node(ax, 0.48, 0.85, "胃肠微生态失衡", width=0.18, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=fig_body_fontsize()),
+            "神经系统": draw_box_node(ax, 0.66, 0.85, "神经系统\n(脑-肠轴)", width=0.16, height=0.095, fc="#EBF8FF", ec="#2B6CB0", fontsize=fig_body_fontsize()),
+            "内分泌系统": draw_box_node(ax, 0.84, 0.85, "内分泌系统", width=0.16, height=0.085, fc="#EBF8FF", ec="#2B6CB0", fontsize=fig_body_fontsize()),
+            "免疫系统": draw_box_node(ax, 0.28, 0.66, "免疫系统", width=0.14, height=0.085, fc="#E6FFFA", ec="#2C7A7B", fontsize=fig_body_fontsize()),
+            "核心": draw_box_node(ax, 0.50, 0.66, "慢性胃炎\n(胃黏膜炎症)", width=0.22, height=0.10, fc="#FEEBC8", ec="#C05621", fontsize=fig_body_fontsize()),
+            "黏膜屏障": draw_box_node(ax, 0.72, 0.66, "胃黏膜屏障受损", width=0.18, height=0.085, fc="#FEEBC8", ec="#C05621", fontsize=fig_body_fontsize()),
+            "酸动力": draw_box_node(ax, 0.34, 0.42, "胃酸/胃动力异常", width=0.18, height=0.085, fc="#FFF5F5", ec="#C53030", fontsize=fig_body_fontsize()),
+            "炎症持续": draw_box_node(ax, 0.50, 0.42, "慢性炎症持续", width=0.16, height=0.085, fc="#FFF5F5", ec="#C53030", fontsize=fig_body_fontsize()),
+            "修复障碍": draw_box_node(ax, 0.66, 0.42, "黏膜修复障碍", width=0.16, height=0.085, fc="#FFF5F5", ec="#C53030", fontsize=fig_body_fontsize()),
+            "症状负担": draw_box_node(ax, 0.28, 0.12, "症状负担", width=0.14, height=0.08, fc="#FAF5FF", ec="#6B46C1", fontsize=fig_body_fontsize()),
+            "营养/贫血风险": draw_box_node(
+                ax,
+                0.50,
+                0.12,
+                "营养吸收受限\n/贫血风险",
+                width=0.20,
+                height=0.09,
+                fc="#FAF5FF",
+                ec="#6B46C1",
+                fontsize=fig_body_fontsize(),
+            ),
+            "癌前病变风险": draw_box_node(ax, 0.72, 0.12, "癌前病变风险", width=0.16, height=0.08, fc="#FAF5FF", ec="#6B46C1", fontsize=fig_body_fontsize()),
         }
 
         # 病因与调节 -> 核心病理
@@ -3925,24 +4846,24 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         draw_poly_arrow(ax, [nodes["修复障碍"]["south"], nodes["癌前病变风险"]["north"]], color="#C53030")
 
         # 关系符号标注（+ 促进, ± 双向调节）
-        ax.text(0.20, 0.77, "+", fontsize=10, color="#2B6CB0", fontweight="bold")
-        ax.text(0.36, 0.77, "+", fontsize=10, color="#2B6CB0", fontweight="bold")
-        ax.text(0.52, 0.77, "+", fontsize=10, color="#2B6CB0", fontweight="bold")
-        ax.text(0.39, 0.66, "±", fontsize=10, color="#2C7A7B", fontweight="bold")
-        ax.text(0.60, 0.77, "±", fontsize=10, color="#2B6CB0", fontweight="bold")
-        ax.text(0.76, 0.77, "±", fontsize=10, color="#2B6CB0", fontweight="bold")
-        ax.text(0.60, 0.66, "+", fontsize=10, color="#C05621", fontweight="bold")
-        ax.text(0.50, 0.53, "+", fontsize=10, color="#C05621", fontweight="bold")
-        ax.text(0.43, 0.32, "+", fontsize=10, color="#C53030", fontweight="bold")
-        ax.text(0.56, 0.32, "+", fontsize=10, color="#C53030", fontweight="bold")
-        ax.text(0.72, 0.32, "+", fontsize=10, color="#C53030", fontweight="bold")
+        ax.text(0.20, 0.77, "+", fontsize=fig_body_fontsize(), color="#2B6CB0", fontweight="bold")
+        ax.text(0.36, 0.77, "+", fontsize=fig_body_fontsize(), color="#2B6CB0", fontweight="bold")
+        ax.text(0.52, 0.77, "+", fontsize=fig_body_fontsize(), color="#2B6CB0", fontweight="bold")
+        ax.text(0.39, 0.66, "±", fontsize=fig_body_fontsize(), color="#2C7A7B", fontweight="bold")
+        ax.text(0.60, 0.77, "±", fontsize=fig_body_fontsize(), color="#2B6CB0", fontweight="bold")
+        ax.text(0.76, 0.77, "±", fontsize=fig_body_fontsize(), color="#2B6CB0", fontweight="bold")
+        ax.text(0.60, 0.66, "+", fontsize=fig_body_fontsize(), color="#C05621", fontweight="bold")
+        ax.text(0.50, 0.53, "+", fontsize=fig_body_fontsize(), color="#C05621", fontweight="bold")
+        ax.text(0.43, 0.32, "+", fontsize=fig_body_fontsize(), color="#C53030", fontweight="bold")
+        ax.text(0.56, 0.32, "+", fontsize=fig_body_fontsize(), color="#C53030", fontweight="bold")
+        ax.text(0.72, 0.32, "+", fontsize=fig_body_fontsize(), color="#C53030", fontweight="bold")
 
-        set_main_title(ax, "fig_2_3", fig23_title, fontsize=12, fontweight="bold")
+        set_main_title(ax, "fig_2_3", fig23_title, fontweight="bold")
     elif fig23_layout_mode() == "layered_path":
         fig, ax = plt.subplots(figsize=(11.0, 5.0))
         draw_fig23_layered_path(ax, fig23_layered_path_config())
         fig._codex_tight_rect = (0, 0, 1, 0.96)
-        set_main_title(ax, "fig_2_3", fig23_title, fontsize=12, fontweight="bold")
+        set_main_title(ax, "fig_2_3", fig23_title, fontweight="bold")
     elif fig23_layout_mode() == "dual_panel":
         fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8))
         ax_l, ax_r = axes
@@ -3958,7 +4879,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
             draw_configured_network_panel(ax_l, left_cfg, default_edge_color="#2B6CB0")
         if isinstance(right_cfg, dict):
             draw_configured_network_panel(ax_r, right_cfg, default_edge_color="#2B6CB0")
-        set_main_suptitle(fig, "fig_2_3", fig23_title, fontsize=12, fontweight="bold", y=0.98)
+        set_main_suptitle(fig, "fig_2_3", fig23_title, fontweight="bold", y=0.98)
     else:
         fig, ax = plt.subplots(figsize=(8.2, 4.8))
         ax.axis("off")
@@ -4024,7 +4945,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
                 core_label,
                 ha="center",
                 va="center",
-                fontsize=9.2,
+                fontsize=fig_body_fontsize(),
                 bbox=dict(boxstyle="round,pad=0.36", fc="#FEEBC8", ec="#C05621", lw=1.2),
             )
             top_links = [n for n in fig23_top_to_core_nodes() if n in pos]
@@ -4039,7 +4960,14 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
                     xytext=(x1, y1 - 0.06),
                     arrowprops=dict(arrowstyle="->", lw=1.1, color="#2B6CB0", connectionstyle="arc3,rad=0.0"),
                 )
-                ax.text((x1 + core_pos[0]) / 2, (y1 + core_pos[1]) / 2 + 0.03, "±", fontsize=8.5, color="#2B6CB0", fontweight="bold")
+                ax.text(
+                    (x1 + core_pos[0]) / 2,
+                    (y1 + core_pos[1]) / 2 + 0.03,
+                    "±",
+                    fontsize=fig_body_fontsize(),
+                    color="#2B6CB0",
+                    fontweight="bold",
+                )
             bottom_links = [n for n in fig23_core_to_bottom_nodes() if n in pos]
             cfg_bottom = fig23_cfg.get("core_to_bottom")
             if isinstance(cfg_bottom, list) and cfg_bottom:
@@ -4052,19 +4980,41 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
                     xytext=(core_pos[0], core_pos[1] - 0.07),
                     arrowprops=dict(arrowstyle="->", lw=1.1, color="#2B6CB0", connectionstyle="arc3,rad=0.0"),
                 )
-                ax.text((x2 + core_pos[0]) / 2, (y2 + core_pos[1]) / 2 - 0.03, "+", fontsize=8.5, color="#2B6CB0", fontweight="bold")
+                ax.text(
+                    (x2 + core_pos[0]) / 2,
+                    (y2 + core_pos[1]) / 2 - 0.03,
+                    "+",
+                    fontsize=fig_body_fontsize(),
+                    color="#2B6CB0",
+                    fontweight="bold",
+                )
 
         for name, (x, y) in pos.items():
-            ax.text(x, y, name, ha="center", va="center", fontsize=10, bbox=dict(boxstyle="round,pad=0.35", fc="#EDF2F7", ec="#2D3748", lw=1.1))
+            ax.text(
+                x,
+                y,
+                name,
+                ha="center",
+                va="center",
+                fontsize=fig_body_fontsize(),
+                bbox=dict(boxstyle="round,pad=0.35", fc="#EDF2F7", ec="#2D3748", lw=1.1),
+            )
         for s, t, rad, sign in filtered_edges:
             x1, y1 = pos[s]
             x2, y2 = pos[t]
             ax.annotate("", xy=(x2, y2 + 0.06), xytext=(x1, y1 - 0.06), arrowprops=dict(arrowstyle="->", lw=1.2, color="#2B6CB0", connectionstyle=f"arc3,rad={rad}"))
             if sign:
-                ax.text((x1 + x2) / 2, (y1 + y2) / 2, sign, fontsize=8.5, color="#2B6CB0", fontweight="bold")
+                ax.text(
+                    (x1 + x2) / 2,
+                    (y1 + y2) / 2,
+                    sign,
+                    fontsize=fig_body_fontsize(),
+                    color="#2B6CB0",
+                    fontweight="bold",
+                )
         if core_drawn:
-            ax.text(0.86, 0.92, "注：+ 促进；± 双向调节", fontsize=8.2, color="#4A5568", ha="right")
-        set_main_title(ax, "fig_2_3", fig23_title, fontsize=12, fontweight="bold")
+            ax.text(0.86, 0.92, "注：+ 促进；± 双向调节", fontsize=fig_body_fontsize(), color="#4A5568", ha="right")
+        set_main_title(ax, "fig_2_3", fig23_title, fontweight="bold")
 
     save_figure(FIG_DIR / "fig_2_3.png", fig)
     fig_2_3_caption = fig23_title
@@ -4081,6 +5031,16 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         pie_title = f"{DISEASE_NAME}常用治疗组合偏好"
         pie_labels = ["药物治疗", "物理治疗", "康复训练", "介入治疗", "手术治疗"]
         pie_vals = [32.0, 26.0, 21.0, 9.0, 12.0]
+    elif is_functional_dyspepsia_profile():
+        diag_flow_title = f"{DISEASE_NAME}临床诊疗流程"
+        diag_flow_nodes = ["症状筛查", "报警征象判断", "Hp检测/内镜分流", "Rome IV 分型", "治疗执行", "复评随访"]
+        schemes = ["test-and-treat", "抑酸治疗", "促动力/消化酶", "神经调节/脑肠轴管理"]
+        high = [27, 24, 18, 16]
+        mid = [43, 41, 45, 47]
+        low = [30, 35, 37, 37]
+        pie_title = f"{DISEASE_NAME}治疗路径构成"
+        pie_labels = ["Hp检测/根除", "抑酸治疗", "促动力/消化酶", "脑肠轴调节", "中医协同"]
+        pie_vals = [17.0, 24.0, 28.0, 17.0, 14.0]
     elif is_gastritis_profile():
         diag_flow_title = f"{DISEASE_NAME}临床诊疗流程"
         diag_flow_nodes = ["症状与红旗征筛查", "Hp检测", "内镜+病理分级", "病因分层", "治疗执行", "复查随访"]
@@ -4184,55 +5144,71 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     save_figure(FIG_DIR / "fig_4_3.png", fig)
     add_fig_meta("fig_4_3", "图表4-3：年度三端销售额对比", "分组柱状图", "米内网", "annual_channel", "annual_channel", "4.2", "第4章数据专线", "数据来源：米内网")
 
-    fig, ax = plt.subplots(figsize=(7.8, 4.2))
-    yoy = ch4.yoy_latest
-    ax.bar(yoy["channel"], yoy["yoy_pct"], color=["#2B6CB0", "#DD6B20", "#2F855A"])
-    ax.axhline(0, color="#4A5568", lw=1)
-    ax.set_ylabel("同比增速（%）")
-    set_main_title(ax, "fig_4_4", f"图表4-4：{ch4.latest_quarter}三端同比增速")
-    for i, v in enumerate(yoy["yoy_pct"]):
-        if pd.notna(v):
-            ax.text(i, v + (0.8 if v >= 0 else -1.2), f"{v:.1f}%", ha="center", va="bottom" if v >= 0 else "top", fontsize=9)
-    save_figure(FIG_DIR / "fig_4_4.png", fig)
-    add_fig_meta("fig_4_4", f"图表4-4：{ch4.latest_quarter}三端同比增速", "柱状图", "米内网", "latest_yoy", "latest_yoy", "4.2", "第4章数据专线", "数据来源：米内网")
+    yoy = ch4.yoy_latest.dropna(subset=["yoy_pct"]).copy()
+    if not yoy.empty:
+        fig, ax = plt.subplots(figsize=(7.8, 4.2))
+        color_map = {"医院端": "#2B6CB0", "药店端": "#DD6B20", "线上端": "#2F855A"}
+        ax.bar(yoy["channel"], yoy["yoy_pct"], color=[color_map.get(str(ch), "#4A5568") for ch in yoy["channel"]])
+        ax.axhline(0, color="#4A5568", lw=1)
+        ax.set_ylabel("同比增速（%）")
+        set_main_title(ax, "fig_4_4", f"图表4-4：{ch4.latest_quarter}三端同比增速")
+        for i, v in enumerate(yoy["yoy_pct"]):
+            if pd.notna(v):
+                ax.text(
+                    i,
+                    v + (0.8 if v >= 0 else -1.2),
+                    f"{v:.1f}%",
+                    ha="center",
+                    va="bottom" if v >= 0 else "top",
+                    fontsize=fig_body_fontsize(),
+                )
+        save_figure(FIG_DIR / "fig_4_4.png", fig)
+        add_fig_meta("fig_4_4", f"图表4-4：{ch4.latest_quarter}三端同比增速", "柱状图", "米内网", "latest_yoy", "latest_yoy", "4.2", "第4章数据专线", "数据来源：米内网")
 
     def top10_bar(df: pd.DataFrame, title: str, path: Path, fig_id: str):
-        fig, ax = plt.subplots(figsize=(8.2, 4.8))
         d = df.copy()
         if d.empty:
-            set_main_title(ax, fig_id, title)
-            ax.axis("off")
-            ax.text(0.5, 0.5, "源表未提供该渠道TOP数据", ha="center", va="center", fontsize=12, color="#4A5568")
-            save_figure(path, fig)
-            return
+            return False
+        d["sales"] = pd.to_numeric(d["sales"], errors="coerce")
+        d = d.dropna(subset=["sales"]).copy()
+        d = d[d["sales"] > 0].copy()
+        if len(d) < 2:
+            return False
+        fig, ax = plt.subplots(figsize=(8.2, 4.8))
         d = d.sort_values("sales", ascending=True)
         ax.barh(d["name"], d["sales"], color="#3182CE")
         ax.set_xlabel("销售额（万元）")
         set_main_title(ax, fig_id, title)
         save_figure(path, fig)
+        return True
 
-    top10_bar(ch4.top_hospital, f"图表4-5：医院端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_5.png", "fig_4_5")
-    add_fig_meta("fig_4_5", f"图表4-5：医院端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_hospital", "top10_hospital", "4.3", "第4章数据专线", "数据来源：米内网")
-    top10_bar(ch4.top_drugstore, f"图表4-6：药店端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_6.png", "fig_4_6")
-    add_fig_meta("fig_4_6", f"图表4-6：药店端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_drugstore", "top10_drugstore", "4.4", "第4章数据专线", "数据来源：米内网")
-    top10_bar(ch4.top_online, f"图表4-7：线上端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_7.png", "fig_4_7")
-    add_fig_meta("fig_4_7", f"图表4-7：线上端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_online", "top10_online", "4.4", "第4章数据专线", "数据来源：米内网")
+    if top10_bar(ch4.top_hospital, f"图表4-5：医院端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_5.png", "fig_4_5"):
+        add_fig_meta("fig_4_5", f"图表4-5：医院端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_hospital", "top10_hospital", "4.3", "第4章数据专线", "数据来源：米内网")
+    if top10_bar(ch4.top_drugstore, f"图表4-6：药店端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_6.png", "fig_4_6"):
+        add_fig_meta("fig_4_6", f"图表4-6：药店端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_drugstore", "top10_drugstore", "4.4", "第4章数据专线", "数据来源：米内网")
+    if top10_bar(ch4.top_online, f"图表4-7：线上端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_7.png", "fig_4_7"):
+        add_fig_meta("fig_4_7", f"图表4-7：线上端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_online", "top10_online", "4.4", "第4章数据专线", "数据来源：米内网")
 
-    fig, ax = plt.subplots(figsize=(8.2, 4.5))
-    cr5 = ch4.cr5_latest
-    ax.bar(cr5["channel"], cr5["cr5_pct"], color=["#2B6CB0", "#DD6B20", "#2F855A"])
-    ax.set_ylabel("CR5（%）")
-    valid_cr5 = cr5["cr5_pct"].dropna()
-    upper = float(valid_cr5.max()) * 1.25 if not valid_cr5.empty else 10.0
-    ax.set_ylim(0, max(10, upper))
-    set_main_title(ax, "fig_4_8", f"图表4-8：{ch4.latest_quarter}三端市场集中度（CR5）")
-    for i, v in enumerate(cr5["cr5_pct"]):
-        if pd.notna(v):
-            ax.text(i, v + 0.8, f"{v:.1f}%", ha="center", fontsize=9)
-        else:
-            ax.text(i, 0.8, "N/A", ha="center", fontsize=9, color="#718096")
-    save_figure(FIG_DIR / "fig_4_8.png", fig)
-    add_fig_meta("fig_4_8", f"图表4-8：{ch4.latest_quarter}三端市场集中度（CR5）", "柱状图", "米内网", "cr5_latest", "cr5_latest", "4.3", "第4章数据专线", "数据来源：米内网")
+    meaningful_cr5_channels: List[str] = []
+    if ch4_top_has_meaningful_competition(ch4.top_hospital):
+        meaningful_cr5_channels.append("医院端")
+    if ch4_top_has_meaningful_competition(ch4.top_drugstore):
+        meaningful_cr5_channels.append("药店端")
+    if ch4_top_has_meaningful_competition(ch4.top_online):
+        meaningful_cr5_channels.append("线上端")
+    cr5 = ch4.cr5_latest[ch4.cr5_latest["channel"].isin(meaningful_cr5_channels)].dropna(subset=["cr5_pct"]).copy()
+    if not cr5.empty:
+        fig, ax = plt.subplots(figsize=(8.2, 4.5))
+        palette = ["#2B6CB0", "#DD6B20", "#2F855A"][: len(cr5)]
+        ax.bar(cr5["channel"], cr5["cr5_pct"], color=palette)
+        ax.set_ylabel("CR5（%）")
+        upper = float(cr5["cr5_pct"].max()) * 1.25 if not cr5.empty else 10.0
+        ax.set_ylim(0, max(10, upper))
+        set_main_title(ax, "fig_4_8", f"图表4-8：{ch4.latest_quarter}三端市场集中度（CR5）")
+        for i, v in enumerate(cr5["cr5_pct"]):
+            ax.text(i, v + 0.8, f"{v:.1f}%", ha="center", fontsize=fig_body_fontsize())
+        save_figure(FIG_DIR / "fig_4_8.png", fig)
+        add_fig_meta("fig_4_8", f"图表4-8：{ch4.latest_quarter}三端市场集中度（CR5）", "柱状图", "米内网", "cr5_latest", "cr5_latest", "4.3", "第4章数据专线", "数据来源：米内网")
 
     # Chapter 5
     if is_cervical_profile():
@@ -4245,6 +5221,16 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         journey_nodes = ["症状识别", "首诊分层", "保守治疗", "功能康复", "复评决策", "长期管理"]
         labels = ["工作姿势负荷", "居家训练依从", "疼痛波动", "复诊可及性", "康复资源不足", "心理压力"]
         impact = [76, 71, 67, 59, 56, 53]
+    elif is_functional_dyspepsia_profile():
+        age_groups = ["18-39岁", "40-49岁", "50-59岁", "60岁及以上"]
+        male = [18, 23, 22, 14]
+        female = [24, 28, 26, 18]
+        factors = ["症状缓解证据", "餐后不适改善", "睡眠情绪协同", "价格可及性", "饮食管理支持", "复诊便利性"]
+        vals = [84, 88, 76, 67, 72, 69]
+        journey_title = f"{DISEASE_NAME}长期管理流程"
+        journey_nodes = ["症状识别", "初诊分型", "治疗启动", "饮食/睡眠管理", "复评调整", "长期随访"]
+        labels = ["症状波动", "饮食执行难度", "睡眠情绪负担", "疗程提醒不足", "复诊可及性", "信息不一致"]
+        impact = [74, 71, 66, 61, 57, 55]
     elif is_gastritis_profile():
         age_groups = ["18-39岁", "40-49岁", "50-59岁", "60岁及以上"]
         male = [18, 24, 23, 17]
@@ -4333,6 +5319,9 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     if is_cervical_profile():
         policy_title = f"{DISEASE_NAME}相关政策时间线"
         policy_events = [("2018", "骨科分级诊疗"), ("2020", "康复服务规范"), ("2022", "集采与支付协同"), ("2024", "慢病管理强化"), ("2025", "互联网复诊规范")]
+    elif is_functional_dyspepsia_profile():
+        policy_title = f"{DISEASE_NAME}相关政策时间线"
+        policy_events = [("2016", "Rome IV 更新"), ("2017", "Dyspepsia指南更新"), ("2022", "BSG功能性消化不良指南"), ("2024", "医保目录调整"), ("2025", "互联网复诊规范化")]
     elif is_gastritis_profile():
         policy_title = f"{DISEASE_NAME}相关政策时间线"
         policy_events = [("2017", "慢性胃炎共识更新"), ("2020", "消化内镜质量规范"), ("2022", "Hp处理共识更新"), ("2024", "医保目录调整"), ("2025", "互联网复诊规范化")]
@@ -4354,7 +5343,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         if events:
             policy_events = events
     title_6_1 = compose_figure_title("6-1", policy_title)
-    draw_policy_timeline(FIG_DIR / "fig_6_1.png", title_6_1, policy_events, figsize=(8.2, 3.0))
+    draw_policy_timeline(FIG_DIR / "fig_6_1.png", title_6_1, policy_events, figsize=(8.2, 3.8))
     rendered_title_rows.append({"fig_id": "fig_6_1", "rendered_title": normalize_disease_text(title_6_1)})
     add_fig_meta("fig_6_1", title_6_1, "时间轴", "政府公开文件", "政策环境", "N/A", "6.1", "政策环境", "数据来源：国家卫健委、国家药监局、国家医保局")
 
@@ -4414,7 +5403,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
                     fc="#F7FAFC",
                     ec="#2D3748",
                     lw=1.2,
-                    fontsize=9.8 if "\n" in label else 10.0,
+                    fontsize=fig_body_fontsize(),
                 )
             )
             cursor += width + top_gap
@@ -4431,7 +5420,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
                 fc="#F7FAFC",
                 ec="#2D3748",
                 lw=1.2,
-                fontsize=9.8 if "\n" in bottom_label else 10.0,
+                fontsize=fig_body_fontsize(),
             )
         )
         arrows = [
@@ -4462,7 +5451,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
                     fc="#F7FAFC",
                     ec="#2D3748",
                     lw=1.2,
-                    fontsize=9.8 if "\n" in label else 10.0,
+                    fontsize=fig_body_fontsize(),
                 )
             )
         arrows = [
@@ -4503,7 +5492,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
             arrows = new_arrows
     for points in arrows:
         draw_poly_arrow(ax, points, color="#2B6CB0", lw=1.5, shrink_start_pts=10.0, shrink_end_pts=10.0)
-    set_main_title(ax, "fig_6_2", "图表6-2：医保支付与监管联动对用药结构的影响路径", fontsize=12, fontweight="bold")
+    set_main_title(ax, "fig_6_2", "图表6-2：医保支付与监管联动对用药结构的影响路径", fontweight="bold")
     save_figure(FIG_DIR / "fig_6_2.png", fig)
     add_fig_meta("fig_6_2", "图表6-2：医保支付与监管联动对用药结构的影响路径", "路径图", "政策公开文件整理", "监管趋势", "N/A", "6.2", "监管趋势", "数据来源：国家医保局、国家药监局")
 
@@ -4534,6 +5523,8 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     fig, ax = plt.subplots(figsize=(7.8, 4.5))
     if is_cervical_profile():
         measures = ["证据升级", "康复网络", "数字随访", "依从管理", "术式优化", "准入协同"]
+    elif is_functional_dyspepsia_profile():
+        measures = ["证据升级", "脑肠轴定位", "院外依从", "支付准入", "数字随访", "医生教育"]
     elif is_gastritis_profile():
         measures = ["证据升级", "Hp管理", "病理随访", "准入协同", "渠道组合", "患者教育"]
     elif is_respiratory_profile():
@@ -4548,7 +5539,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     measures, x, y, sizes = measures[:n72], x[:n72], y[:n72], sizes[:n72]
     ax.scatter(x, y, s=sizes, c=["#2B6CB0", "#3182CE", "#63B3ED", "#2F855A", "#38A169", "#D69E2E"], alpha=0.75)
     for i, m in enumerate(measures):
-        ax.text(x[i] + 0.8, y[i] + 0.6, m, fontsize=8)
+        ax.text(x[i] + 0.8, y[i] + 0.6, m, fontsize=fig_body_fontsize())
     ax.set_xlabel("战略价值")
     ax.set_ylabel("落地可行性")
     set_main_title(ax, "fig_7_2", "图表7-2：战略举措优先级矩阵")
@@ -4581,6 +5572,13 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         ["fig_id", "rendered_title", "has_serial_prefix"],
     )
 
+    assignment_map = block_figure_assignment_map(runtime_block_specs())
+    for row in fig_rows:
+        fig_id = str(row.get("fig_id", "")).strip()
+        if fig_id in assignment_map:
+            row["插入到哪个block之后"] = assignment_map[fig_id]
+    fig_rows.sort(key=lambda row: figure_sort_key(str(row.get("fig_id", "")).strip()))
+
     return fig_rows
 
 
@@ -4607,47 +5605,47 @@ def apply_reference_paragraph_format(paragraph) -> None:
     paragraph.paragraph_format.right_indent = Inches(0)
 
 
-def insert_block_with_figures(doc: Document, subtitle: str, content: str, fig_ids: List[str], fig_meta: Dict[str, Dict[str, str]]) -> None:
+def insert_block_with_figures(doc: Document, spec: BlockSpec, content: str, fig_ids: List[str], fig_meta: Dict[str, Dict[str, str]]) -> None:
     h2 = doc.add_paragraph(style="二级目录")
-    set_para_text(h2, subtitle)
-    paragraphs = split_paragraphs(content)
-    if not paragraphs:
+    set_para_text(h2, spec.subtitle)
+    elements = build_block_render_elements(spec, content)
+    body_paragraph_total = sum(1 for kind, _ in elements if kind == "body")
+    if not body_paragraph_total:
         return
 
     insert_positions: List[int] = []
     if len(fig_ids) == 1:
-        insert_positions = [max(1, len(paragraphs) // 2)]
+        insert_positions = [max(1, body_paragraph_total // 2)]
     elif len(fig_ids) >= 2:
-        p1 = max(1, len(paragraphs) // 3)
-        p2 = max(p1 + 1, len(paragraphs) * 2 // 3)
+        p1 = max(1, body_paragraph_total // 3)
+        p2 = max(p1 + 1, body_paragraph_total * 2 // 3)
         insert_positions = [p1, p2]
         if len(fig_ids) > 2:
-            insert_positions.extend([len(paragraphs)] * (len(fig_ids) - 2))
+            insert_positions.extend([body_paragraph_total] * (len(fig_ids) - 2))
 
     fig_ptr = 0
-    for i, para_text in enumerate(paragraphs, start=1):
+    body_ptr = 0
+    for kind, para_text in elements:
+        if kind == "heading3":
+            p = doc.add_paragraph(style="三级目录")
+            set_para_text(p, para_text)
+            continue
+
         p = doc.add_paragraph(style="数据报告正文")
         set_para_text(p, para_text)
-        while fig_ptr < len(fig_ids) and i == insert_positions[min(fig_ptr, len(insert_positions) - 1)]:
+        body_ptr += 1
+        while fig_ptr < len(fig_ids) and body_ptr == insert_positions[min(fig_ptr, len(insert_positions) - 1)]:
             fid = fig_ids[fig_ptr]
             meta = fig_meta[fid]
-            cap = doc.add_paragraph(style="数据报告正文")
-            set_para_text(cap, meta["caption"], bold=True, center=True)
-            doc.add_picture(str(FIG_DIR / meta["输出文件名"]), width=Inches(5.6))
+            doc.add_picture(str(FIG_DIR / meta["输出文件名"]), width=Inches(DOCX_FIGURE_WIDTH_INCH))
             doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            src = doc.add_paragraph(style="数据报告正文")
-            set_para_text(src, meta["source_line"], center=True)
             fig_ptr += 1
 
     while fig_ptr < len(fig_ids):
         fid = fig_ids[fig_ptr]
         meta = fig_meta[fid]
-        cap = doc.add_paragraph(style="数据报告正文")
-        set_para_text(cap, meta["caption"], bold=True, center=True)
-        doc.add_picture(str(FIG_DIR / meta["输出文件名"]), width=Inches(5.6))
+        doc.add_picture(str(FIG_DIR / meta["输出文件名"]), width=Inches(DOCX_FIGURE_WIDTH_INCH))
         doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        src = doc.add_paragraph(style="数据报告正文")
-        set_para_text(src, meta["source_line"], center=True)
         fig_ptr += 1
 
 
@@ -4679,7 +5677,7 @@ def assemble_docx(specs: List[BlockSpec], block_text: Dict[str, str], summary: s
         set_para_text(h1, chapter_title(ch))
         for s in specs_by_ch[ch]:
             figs = [x for x in s.fig_ids.split("|") if x]
-            insert_block_with_figures(doc, s.subtitle, block_text[s.block_id], figs, fig_map)
+            insert_block_with_figures(doc, s, block_text[s.block_id], figs, fig_map)
 
     h_sum = doc.add_paragraph(style="一级目录")
     set_para_text(h_sum, "总结")
@@ -5169,6 +6167,22 @@ def collect_text_quality_metrics(specs: List[BlockSpec], block_text: Dict[str, s
         if hit_types < 2:
             medical_density_failed.append(s.block_id)
 
+    summary_block_chars: Dict[str, int] = {}
+    overlong_summary_blocks: List[str] = []
+    rendered_h3_by_block: Dict[str, int] = {}
+    for spec in specs:
+        rendered_h3 = sum(1 for kind, _ in build_block_render_elements(spec, block_text[spec.block_id]) if kind == "heading3")
+        rendered_h3_by_block[spec.block_id] = rendered_h3
+        if not is_summary_block(spec.subtitle):
+            continue
+        chars = len(re.sub(r"\s+", "", block_text[spec.block_id]))
+        summary_block_chars[spec.block_id] = chars
+        if chars > SUMMARY_BLOCK_WARN_CHARS:
+            overlong_summary_blocks.append(f"{spec.block_id}={chars}")
+    missing_h3_blocks = [
+        spec.block_id for spec in specs if (not is_summary_block(spec.subtitle)) and int(rendered_h3_by_block.get(spec.block_id, 0)) == 0
+    ]
+
     cagr_logic_ok = True
     ch41 = block_text.get("4.1", "")
     ch44 = block_text.get("4.4", "")
@@ -5213,6 +6227,10 @@ def collect_text_quality_metrics(specs: List[BlockSpec], block_text: Dict[str, s
         "anchor_cov_by_block": anchor_cov_by_block,
         "low_anchor_blocks": low_anchor_blocks,
         "medical_density_failed": medical_density_failed,
+        "summary_block_chars": summary_block_chars,
+        "overlong_summary_blocks": overlong_summary_blocks,
+        "rendered_h3_by_block": rendered_h3_by_block,
+        "missing_h3_blocks": missing_h3_blocks,
         "cagr_logic_ok": cagr_logic_ok,
         "cr5_logic_ok": cr5_logic_ok,
     }
@@ -5223,6 +6241,9 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
     chapter_len_fails: List[str] = metrics["chapter_len_fails"]  # type: ignore[assignment]
     low_anchor_blocks: List[str] = metrics["low_anchor_blocks"]  # type: ignore[assignment]
     medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
+    overlong_summary_blocks: List[str] = metrics["overlong_summary_blocks"]  # type: ignore[assignment]
+    rendered_h3_by_block: Dict[str, int] = metrics["rendered_h3_by_block"]  # type: ignore[assignment]
+    missing_h3_blocks: List[str] = metrics["missing_h3_blocks"]  # type: ignore[assignment]
     total_chars = sum(chapter_chars.values()) + len(re.sub(r"\s+", "", summary_text))
     total_gap = max(0, 30000 - total_chars)
     summary_chars = len(re.sub(r"\s+", "", summary_text))
@@ -5260,13 +6281,16 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
         "",
         "[Hard Rules]",
         f"1) Every chapter should meet the script floor; a shortfall within {CHAPTER_CHAR_TOLERANCE} chars is acceptable, and the full draft must stay within 30000-34000 chars.",
-        "2) Chapter 4 may only use Excel-derived facts, ch04_codex_extract.json, and generated figure scope. Do not invent new market numbers.",
-        "3) New medical, policy, or pathway claims must be traceable to 00_evidence.txt, refs.txt, manifest_fig.csv, or the existing draft context.",
-        "4) Keep citation numbering consistent. Do not fabricate citation IDs.",
-        "5) Prioritize cause stratification, mechanism, diagnosis, evidence, boundaries, and red flags in Chapters 1-3.",
-        "6) Prioritize segmentation, pathway differences, adherence mechanisms, policy constraints, forecast assumptions, and strategy actions in Chapters 5-7.",
-        "7) Non-chapter-4 figure source lines must be specific. Do not use only 'public source??' style placeholders.",
-        "8) Avoid empty management jargon. Each paragraph should carry a real medical or market anchor.",
+        "2) Every non-summary block should contain 2-3 third-level headings in the form '1.1.1 标题'. Do not stop at second-level headings only.",
+        "3) Every '本章小结' should stay around 500 chars, must not contain charts, and should summarize findings instead of writing management advice.",
+        "4) Chapter 4 may only use Excel-derived facts, ch04_codex_extract.json, and generated figure scope. Do not invent new market numbers.",
+        "5) If a channel-level Chapter-4 dataset is missing (for example a top10 or CR5 channel cut), omit that specific small subsection instead of writing placeholder analysis.",
+        "6) New medical, policy, or pathway claims must be traceable to 00_evidence.txt, refs.txt, manifest_fig.csv, or the existing draft context.",
+        "7) Keep citation numbering consistent. Do not fabricate citation IDs.",
+        "8) Prioritize cause stratification, mechanism, diagnosis, evidence, boundaries, and red flags in Chapters 1-3.",
+        "9) Prioritize segmentation, pathway differences, adherence mechanisms, policy constraints, forecast assumptions, and strategy actions in Chapters 5-7.",
+        "10) Non-chapter-4 figure source lines must be specific. Do not use only 'public source??' style placeholders.",
+        "11) Avoid empty management jargon. Each paragraph should carry a real medical or market anchor.",
         "",
         "[Suggested Order]",
         ("- Fix under-length chapters first: " + ", ".join(priority_chapters)) if priority_chapters else "- Chapter lengths already pass; focus on weak blocks and summary quality first.",
@@ -5292,6 +6316,8 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
             "- Under-length chapters: " + (", ".join(chapter_len_fails) if chapter_len_fails else "none"),
             "- Low-anchor blocks: " + (", ".join(low_anchor_blocks) if low_anchor_blocks else "none"),
             "- Low medical density blocks (chapters 1-3): " + (", ".join(medical_density_failed) if medical_density_failed else "none"),
+            "- Overlong chapter summaries: " + (", ".join(overlong_summary_blocks) if overlong_summary_blocks else "none"),
+            "- Blocks with no Codex-authored third-level headings: " + (", ".join(missing_h3_blocks) if missing_h3_blocks else "none"),
             "",
             "[Delivery]",
             f"- Overwrite: {OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
@@ -5339,12 +6365,15 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
         "",
         "[Hard Writing Rules]",
         "1) Finish the body first, then write the summary.",
-        "2) Chapter 4 must stay inside Excel-derived scope only. Do not add new market numbers, shares, or growth rates.",
-        "3) Each paragraph should contain concrete anchors: mechanism, pathway, evidence, policy basis, figure scope, or market fact.",
-        "4) Keep citations consistent and distributed across paragraphs instead of clustering them at the end.",
-        "5) Non-chapter-4 figure source lines must be specific to guideline/review/institution level.",
-        "6) If evidence is weak, narrow the claim boundary instead of padding with generic language.",
-        "7) If fig_2_3 is not ready, write fig23_codex_spec.json first before stage3-stage5.",
+        "2) Every non-summary block should contain 2-3 third-level headings, written as '1.1.1 标题' so the template's 三级目录 can be used.",
+        "3) Every '本章小结' should stay around 500 chars, should not contain charts, and should only close the chapter logic instead of giving enterprise management advice.",
+        "4) Chapter 4 must stay inside Excel-derived scope only. Do not add new market numbers, shares, or growth rates.",
+        "5) If a channel-level Chapter-4 dataset is missing in Excel or ch04_codex_extract.json, omit that specific small subsection and do not write placeholder text just to keep symmetry.",
+        "6) Each paragraph should contain concrete anchors: mechanism, pathway, evidence, policy basis, figure scope, or market fact.",
+        "7) Keep citations consistent and distributed across paragraphs instead of clustering them at the end.",
+        "8) Non-chapter-4 figure source lines must be specific to guideline/review/institution level.",
+        "9) If evidence is weak, narrow the claim boundary instead of padding with generic language.",
+        "10) If fig_2_3 is not ready, write fig23_codex_spec.json first before stage3-stage5.",
         "",
         "[Chapter Targets]",
     ]
@@ -5443,7 +6472,7 @@ def build_fig23_codex_prompt() -> str:
 
 
 def write_codex_preflight_assets() -> None:
-    specs = build_block_specs()
+    specs = runtime_block_specs()
     write_text(OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME, build_codex_content_blueprint(specs) + "\n")
     write_json(OUT_ROOT / FIG23_CODEX_SPEC_TEMPLATE_NAME, build_fig23_codex_spec_template())
     write_text(OUT_ROOT / FIG23_CODEX_PROMPT_NAME, build_fig23_codex_prompt() + "\n")
@@ -5499,9 +6528,16 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
     chapter_no_cites: List[int] = metrics["chapter_no_cites"]  # type: ignore[assignment]
     chapter_len_fails: List[str] = metrics["chapter_len_fails"]  # type: ignore[assignment]
     medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
+    overlong_summary_blocks: List[str] = metrics["overlong_summary_blocks"]  # type: ignore[assignment]
+    rendered_h3_by_block: Dict[str, int] = metrics["rendered_h3_by_block"]  # type: ignore[assignment]
+    missing_h3_blocks: List[str] = metrics["missing_h3_blocks"]  # type: ignore[assignment]
     cagr_logic_ok: bool = metrics["cagr_logic_ok"]  # type: ignore[assignment]
     cr5_logic_ok: bool = metrics["cr5_logic_ok"]  # type: ignore[assignment]
     total_chars = sum(len(re.sub(r"\s+", "", block_text[s.block_id])) for s in specs) + len(re.sub(r"\s+", "", summary_text))
+
+    missing_h3_blocks = [
+        spec.block_id for spec in specs if (not is_summary_block(spec.subtitle)) and int(rendered_h3_by_block.get(spec.block_id, 0)) == 0
+    ]
 
     fail_reasons: List[str] = []
     if max(stale_counts.values()) > 8:
@@ -5526,6 +6562,8 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
         fail_reasons.append("分章最低字数未达标")
     if medical_density_failed:
         fail_reasons.append("第1-3章医学要素不足")
+    if missing_h3_blocks:
+        fail_reasons.append("缺少Codex显式三级标题")
     if not cagr_logic_ok:
         fail_reasons.append("第四章CAGR逻辑冲突")
     if not cr5_logic_ok:
@@ -5546,6 +6584,8 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
         "第四章逻辑一致性：" + ("通过" if cagr_logic_ok else "不通过"),
         "第四章CR5叙述一致性：" + ("通过" if cr5_logic_ok else "不通过"),
         "第1-3章医学密度不足block：" + (", ".join(medical_density_failed) if medical_density_failed else "无"),
+        "缺少三级标题block：" + (", ".join(missing_h3_blocks) if missing_h3_blocks else "无"),
+        "本章小结超长block：" + (", ".join(overlong_summary_blocks) if overlong_summary_blocks else "无"),
         "",
         "【分章统计】",
     ]
@@ -5581,8 +6621,16 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
 def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: List[Dict[str, str]], summary_text: str) -> Tuple[str, bool]:
     total_chars = sum(len(re.sub(r"\s+", "", block_text[s.block_id])) for s in specs) + len(re.sub(r"\s+", "", summary_text))
     fig_files = sorted(FIG_DIR.glob("fig_*.png"))
-    fig_count = len(fig_files)
-    ch4_fig_count = len([f for f in fig_files if f.stem.startswith("fig_4_")])
+    fig_count = len(fig_rows)
+    actual_ch4_fig_ids = sorted(
+        [str(row.get("fig_id", "")).strip() for row in fig_rows if str(row.get("fig_id", "")).strip().startswith("fig_4_")],
+        key=figure_sort_key,
+    )
+    expected_ch4_fig_ids = sorted(
+        [fig_id for fig_id in chapter4_available_figure_ids(load_ch4_data_for_runtime()) if fig_id.startswith("fig_4_")],
+        key=figure_sort_key,
+    )
+    ch4_fig_count = len(actual_ch4_fig_ids)
 
     doc_xml = extract_docx_text_xml(FINAL_DOCX)
     current_disease_token = DISEASE_NAME.strip()
@@ -5645,7 +6693,16 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     doc = Document(str(FINAL_DOCX))
     cap_count = sum(1 for p in doc.paragraphs if p.text.strip().startswith("图表"))
     src_count = sum(1 for p in doc.paragraphs if p.text.strip().startswith("数据来源："))
-    src_ch4_count = sum(1 for p in doc.paragraphs if p.text.strip() == "数据来源：米内网")
+    heading3_count = sum(1 for p in doc.paragraphs if (p.style is not None and p.style.name == "三级目录") and p.text.strip())
+    missing_source_line, missing_embedded_source, mismatched_embedded_source = collect_figure_source_footer_issues(fig_rows)
+
+    caption_order: List[Tuple[int, int]] = []
+    for paragraph in doc.paragraphs:
+        text = paragraph.text.strip()
+        match = re.match(r"^图表(\d+)-(\d+)[：:]", text)
+        if match:
+            caption_order.append((int(match.group(1)), int(match.group(2))))
+    figure_order_ok = caption_order == sorted(caption_order)
 
     title_registry_error = ""
     title_registry: Dict[str, str] = {}
@@ -5723,6 +6780,7 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     cagr_logic_ok: bool = metrics["cagr_logic_ok"]  # type: ignore[assignment]
     cr5_logic_ok: bool = metrics["cr5_logic_ok"]  # type: ignore[assignment]
     medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
+    missing_h3_blocks: List[str] = metrics["missing_h3_blocks"]  # type: ignore[assignment]
 
     # Reference traceability checks.
     refs_lines = [normalize_reference_line(x) for x in (OUT_ROOT / "refs.txt").read_text(encoding="utf-8").splitlines() if x.strip()]
@@ -5759,12 +6817,20 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     qa_fail_reasons: List[str] = []
     if not (20 <= fig_count <= 30):
         qa_fail_reasons.append("图表总量不在20-30")
-    if not (6 <= ch4_fig_count <= 8):
-        qa_fail_reasons.append("第四章图表数量不在6-8")
-    if cap_count != src_count or src_count != fig_count:
-        qa_fail_reasons.append("图表标题/来源行数与图表数不一致")
-    if src_ch4_count != ch4_fig_count:
-        qa_fail_reasons.append("第四章数据来源“米内网”行数不一致")
+    if actual_ch4_fig_ids != expected_ch4_fig_ids:
+        qa_fail_reasons.append("第四章图表未按数据可用性裁剪")
+    if cap_count not in (0, fig_count):
+        qa_fail_reasons.append("图表标题行数与图表数不一致")
+    if src_count != 0:
+        qa_fail_reasons.append("文档仍保留独立数据来源段落")
+    if not figure_order_ok:
+        qa_fail_reasons.append("图表在文档中的出现顺序不是按图号递增")
+    if heading3_count == 0:
+        qa_fail_reasons.append("文档未渲染三级标题")
+    if missing_h3_blocks:
+        qa_fail_reasons.append("正文缺少Codex显式三级标题")
+    if missing_source_line or missing_embedded_source or mismatched_embedded_source:
+        qa_fail_reasons.append("图片内嵌数据来源缺失或与manifest不一致")
     if not all(v == 0 for v in placeholder_hits.values()):
         qa_fail_reasons.append("存在占位符残留")
     if not footer_has_page:
@@ -5859,10 +6925,16 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         f"总字数（章节+总结，去空白）：{total_chars}",
         f"图表总数：{fig_count}",
         f"第四章图表数：{ch4_fig_count}",
+        "第四章应有fig_id：" + (", ".join(expected_ch4_fig_ids) if expected_ch4_fig_ids else "无"),
+        "第四章实际fig_id：" + (", ".join(actual_ch4_fig_ids) if actual_ch4_fig_ids else "无"),
         f"manifest_fig行数：{len(fig_rows)}",
         f"文档图表标题行数：{cap_count}",
-        f"文档数据来源行数：{src_count}",
-        f"第四章“数据来源：米内网”行数：{src_ch4_count}",
+        f"文档独立数据来源行数：{src_count}",
+        f"文档三级标题数：{heading3_count}",
+        f"图表顺序递增：{'通过' if figure_order_ok else '不通过'}",
+        "manifest缺失source_line fig_id：" + (", ".join(missing_source_line) if missing_source_line else "无"),
+        "图片内嵌来源缺失fig_id：" + (", ".join(missing_embedded_source) if missing_embedded_source else "无"),
+        "图片内嵌来源不一致fig_id：" + (", ".join(mismatched_embedded_source) if mismatched_embedded_source else "无"),
         f"标题重复前缀命中数：{dup_prefix_hits}",
         "占位符残留统计：" + ", ".join([f"{k}={v}" for k, v in placeholder_hits.items()]),
         f"页码重置配置(w:start)：{'检测到（存在重置风险）' if pgnum_start_present else '未检测到'}",
@@ -5880,6 +6952,7 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         "第四章逻辑一致性：" + ("通过" if cagr_logic_ok else "不通过"),
         "第四章CR5叙述一致性：" + ("通过" if cr5_logic_ok else "不通过"),
         "第1-3章医学密度不足block：" + (", ".join(medical_density_failed) if medical_density_failed else "无"),
+        "缺少Codex显式三级标题block：" + (", ".join(missing_h3_blocks) if missing_h3_blocks else "无"),
         "参考文献可核验异常行：" + (", ".join(bad_ref_rows) if bad_ref_rows else "无"),
         "证据池条数：" + str(evidence_count),
         "参考文献条数：" + str(ref_count),
@@ -5930,9 +7003,12 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         f"第6章>=4800或差距<=100：{'通过' if chapter_char_gate_ok(6, chapter_chars[6]) else '不通过'}",
         f"第7章>=4800或差距<=100：{'通过' if chapter_char_gate_ok(7, chapter_chars[7]) else '不通过'}",
         f"图表总量20-30：{'通过' if 20 <= fig_count <= 30 else '不通过'}",
-        f"第四章图表6-8：{'通过' if 6 <= ch4_fig_count <= 8 else '不通过'}",
-        f"标题行与来源行一致：{'通过' if cap_count == src_count == fig_count else '不通过'}",
-        f"第四章来源行固定米内网：{'通过' if src_ch4_count == ch4_fig_count else '不通过'}",
+        f"第四章图表按数据可用性匹配：{'通过' if actual_ch4_fig_ids == expected_ch4_fig_ids else '不通过'}",
+        f"图表标题行数匹配：{'通过' if cap_count in (0, fig_count) else '不通过'}",
+        f"文档无独立来源段落：{'通过' if src_count == 0 else '不通过'}",
+        f"图表顺序按编号递增：{'通过' if figure_order_ok else '不通过'}",
+        f"三级标题已渲染：{'通过' if heading3_count > 0 else '不通过'}",
+        f"图片来源内嵌一致性：{'通过' if not (missing_source_line or missing_embedded_source or mismatched_embedded_source) else '不通过'}",
         f"占位符清洗：{'通过' if all(v == 0 for v in placeholder_hits.values()) else '不通过'}",
         f"页码连续性（无w:start重置）：{'通过' if not pgnum_start_present else '不通过'}",
         f"节页脚统一引用：{'通过' if footer_uniform_ok else '不通过'}",
@@ -5948,6 +7024,7 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         f"第四章逻辑一致性：{'通过' if cagr_logic_ok else '不通过'}",
         f"第四章CR5叙述一致性：{'通过' if cr5_logic_ok else '不通过'}",
         f"第1-3章医学密度校验：{'通过' if not medical_density_failed else '不通过'}",
+        f"Codex显式三级标题：{'通过' if not missing_h3_blocks else '不通过'}",
         f"引用可核验性：{'通过' if not bad_ref_rows else '不通过'}",
         f"证据池/参考解析：{'通过' if not (evidence_parse_errors or ref_parse_errors) else '不通过'}",
         f"证据池与参考条数一致：{'通过' if evidence_count == ref_count and evidence_count > 0 else '不通过'}",
@@ -6098,7 +7175,7 @@ def run_stage3_ch4_and_figures() -> None:
     write_ch4_profile_files(ch4)
     write_text(OUT_ROOT / CH4_NARRATIVE_BRIEF_NAME, build_ch4_narrative_brief(ch4) + "\n")
     write_codex_preflight_assets()
-    specs = build_block_specs()
+    specs = runtime_block_specs()
     try:
         block_text = load_block_text_from_files(specs)
         summary_path = OUT_ROOT / "summary.txt"
@@ -6130,6 +7207,8 @@ def run_stage3_ch4_and_figures() -> None:
             f"and for other semantic figures use {OUT_ROOT / FIGURE_SPECS_CODEX_PROMPT_NAME} -> {OUT_ROOT / 'figure_specs.json'}."
         ) from exc
     fig_rows = generate_figures(ch4)
+    cleanup_stale_figure_outputs(fig_rows)
+    ensure_figure_source_footers(fig_rows)
     make_manifest_files(specs, fig_rows)
     print(f"阶段3完成（复用文本）：{OUT_ROOT / 'ch04_agg_tables.xlsx'}，图表数={len(fig_rows)}")
 
@@ -6138,11 +7217,12 @@ def run_stage4_assemble_docx() -> None:
     ensure_runtime_dirs()
     ensure_inputs(require_template=True)
     cleanup_stale_final_docx()
-    specs = build_block_specs()
+    specs = runtime_block_specs()
     block_text = load_block_text_from_files(specs)
     summary_text, refs_text = load_summary_and_refs()
     fig_rows = load_manifest_fig_rows()
     ensure_figure_files(fig_rows)
+    ensure_figure_source_footers(fig_rows)
     assemble_docx(specs, block_text, summary_text, refs_text, fig_rows)
     post_process_docx_xml(FINAL_DOCX)
     print(f"阶段4完成：{FINAL_DOCX}")
@@ -6150,7 +7230,7 @@ def run_stage4_assemble_docx() -> None:
 
 def run_stage5_qa() -> None:
     ensure_runtime_dirs()
-    specs = build_block_specs()
+    specs = runtime_block_specs()
     if not FINAL_DOCX.exists():
         raise FileNotFoundError(f"Missing final docx: {FINAL_DOCX}. 请先执行阶段4。")
     block_text = load_block_text_from_files(specs)
@@ -6168,7 +7248,7 @@ def run_stage5_qa() -> None:
 
 
 def ensure_prewritten_text_ready() -> None:
-    specs = build_block_specs()
+    specs = runtime_block_specs()
     _ = load_block_text_from_files(specs)
     summary_path = OUT_ROOT / "summary.txt"
     if not summary_path.exists():
