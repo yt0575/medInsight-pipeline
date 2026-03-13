@@ -91,6 +91,9 @@ FIG23_CODEX_SPEC_NAME = "fig23_codex_spec.json"
 FIG23_CODEX_SPEC_TEMPLATE_NAME = "fig23_codex_spec_template.json"
 FIG23_CODEX_PROMPT_NAME = "fig23_codex_prompt.txt"
 CODEX_CONTENT_BLUEPRINT_NAME = "codex_content_blueprint.txt"
+CODEX_BLOCK_CARDS_NAME = "codex_block_cards.txt"
+CODEX_BLOCK_CARD_DIR_NAME = "codex_block_cards"
+CODEX_NEXT_ACTIONS_NAME = "codex_next_actions.txt"
 FIGURE_SPECS_CODEX_TEMPLATE_NAME = "figure_specs_codex_template.json"
 FIGURE_SPECS_CODEX_PROMPT_NAME = "figure_specs_codex_prompt.txt"
 SEMANTIC_REVIEW_PROMPT_NAME = "semantic_review_prompt.txt"
@@ -2349,6 +2352,8 @@ def write_codex_progress_assets(
     normalized_summary = str(summary_text or "").strip()
     write_text(OUT_ROOT / CODEX_GAP_PANEL_NAME, build_codex_gap_panel(specs, normalized_block_text, normalized_summary) + "\n")
     write_text(OUT_ROOT / CHAPTER_PRECHECK_NAME, build_chapter_precheck(specs, normalized_block_text, normalized_summary) + "\n")
+    write_codex_block_cards(specs, normalized_block_text)
+    write_text(OUT_ROOT / CODEX_NEXT_ACTIONS_NAME, build_codex_next_actions(specs, normalized_block_text, normalized_summary) + "\n")
 
 
 def build_evidence_and_refs() -> Tuple[str, str]:
@@ -2396,6 +2401,123 @@ def distribute_delta(total_delta: int, slots: int) -> List[int]:
         return [0] * max(slots, 0)
     base, extra = divmod(total_delta, slots)
     return [base + (1 if idx < extra else 0) for idx in range(slots)]
+
+
+def join_topic_labels(items: List[str]) -> str:
+    values = [str(item).strip() for item in items if str(item).strip()]
+    if not values:
+        return "要点展开"
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]}与{values[1]}"
+    return "、".join(values[:-1]) + f"与{values[-1]}"
+
+
+def split_evenly(items: List[str], slots: int) -> List[List[str]]:
+    values = [str(item).strip() for item in items if str(item).strip()]
+    if not values or slots <= 0:
+        return []
+    slots = max(1, min(int(slots), len(values)))
+    base, extra = divmod(len(values), slots)
+    chunks: List[List[str]] = []
+    cursor = 0
+    for idx in range(slots):
+        take = base + (1 if idx < extra else 0)
+        chunk = values[cursor : cursor + take]
+        if chunk:
+            chunks.append(chunk)
+        cursor += take
+    return chunks
+
+
+def suggested_h3_count(spec: "BlockSpec") -> int:
+    if is_summary_block(spec.subtitle):
+        return 0
+    return 3 if int(spec.target_chars) >= 1400 else 2
+
+
+def build_block_h3_suggestions(spec: "BlockSpec") -> List[str]:
+    count = suggested_h3_count(spec)
+    if count <= 0:
+        return []
+    chunks = split_evenly(list(spec.topics), count)
+    if not chunks:
+        return [f"{spec.block_id}.{idx} 要点展开" for idx in range(1, count + 1)]
+    suggestions: List[str] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        suggestions.append(f"{spec.block_id}.{idx} {join_topic_labels(chunk)}")
+    return suggestions
+
+
+def block_card_filename(block_id: str) -> str:
+    return f"block_{str(block_id).replace('.', '_')}.txt"
+
+
+def collect_block_status_snapshot(spec: "BlockSpec", specs: List["BlockSpec"], block_text: Dict[str, str], metrics: Dict[str, object]) -> Dict[str, object]:
+    chapter_specs = [item for item in specs if item.chapter == spec.chapter]
+    chapter_index = next((idx for idx, item in enumerate(chapter_specs) if item.block_id == spec.block_id), 0)
+    prev_block = chapter_specs[chapter_index - 1].block_id if chapter_index > 0 else "none"
+    next_block = chapter_specs[chapter_index + 1].block_id if chapter_index < len(chapter_specs) - 1 else "none"
+    current_text = str(block_text.get(spec.block_id, "")).strip()
+    current_chars = len(re.sub(r"\s+", "", current_text))
+    target_chars = int(spec.target_chars)
+    block_gap = max(0, target_chars - current_chars)
+    paragraphs = split_paragraphs(current_text)
+    anchored = sum(1 for paragraph in paragraphs if paragraph_has_anchor(paragraph))
+    anchor_cov = (anchored / len(paragraphs)) if paragraphs else 0.0
+    citation_count = len(re.findall(r"\[\d+\]", current_text))
+    rendered_h3_by_block: Dict[str, int] = metrics["rendered_h3_by_block"]  # type: ignore[assignment]
+    medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
+    chapter_chars: Dict[int, int] = metrics["chapter_chars"]  # type: ignore[assignment]
+    current_h3 = int(rendered_h3_by_block.get(spec.block_id, 0))
+    expected_h3 = suggested_h3_count(spec)
+    chapter_current_chars = int(chapter_chars.get(spec.chapter, 0))
+    chapter_shortfall = chapter_char_shortfall(spec.chapter, chapter_current_chars)
+
+    weak_spots: List[str] = []
+    weak_flags: List[str] = []
+    if current_chars == 0:
+        weak_spots.append("当前 block 仍为空，先写出可过线首稿。")
+        weak_flags.append("empty")
+    elif block_gap > 0:
+        weak_spots.append(f"当前 block 比目标少 {block_gap} 字，优先补 1 段带锚点内容。")
+        weak_flags.append(f"gap={block_gap}")
+    if not is_summary_block(spec.subtitle) and current_h3 < expected_h3:
+        weak_spots.append(f"当前三级标题数 {current_h3}，建议补到 {expected_h3}。")
+        weak_flags.append(f"h3={current_h3}/{expected_h3}")
+    if paragraphs and anchor_cov < 0.70:
+        weak_spots.append(f"当前锚点覆盖率仅 {anchor_cov*100:.1f}%，新增段落优先补 2024/2025Q3/72小时/CR5/[3] 这类锚点。")
+        weak_flags.append(f"anchor={anchor_cov*100:.0f}%")
+    if spec.chapter <= 3 and spec.block_id in medical_density_failed:
+        weak_spots.append("第1-3章医学密度不足，需显式补机制、诊断、风险、证据或随访节点。")
+        weak_flags.append("medical")
+    if is_summary_block(spec.subtitle) and current_chars > SUMMARY_BLOCK_WARN_CHARS:
+        weak_spots.append(f"本章小结当前 {current_chars} 字，建议压回 450-650 字。")
+        weak_flags.append(f"summary={current_chars}")
+    if chapter_shortfall > 0:
+        weak_spots.append(f"所在章节当前仍差 {chapter_shortfall} 字到硬下限，优先在本章内补齐。")
+        weak_flags.append(f"chapter_gap={chapter_shortfall}")
+
+    return {
+        "chapter_specs": chapter_specs,
+        "chapter_index": chapter_index,
+        "prev_block": prev_block,
+        "next_block": next_block,
+        "current_text": current_text,
+        "current_chars": current_chars,
+        "target_chars": target_chars,
+        "block_gap": block_gap,
+        "paragraphs": paragraphs,
+        "anchor_cov": anchor_cov,
+        "citation_count": citation_count,
+        "current_h3": current_h3,
+        "expected_h3": expected_h3,
+        "chapter_current_chars": chapter_current_chars,
+        "chapter_shortfall": chapter_shortfall,
+        "weak_spots": weak_spots,
+        "weak_flags": weak_flags,
+    }
 
 
 def normalize_block_specs(specs: List[BlockSpec]) -> List[BlockSpec]:
@@ -6141,6 +6263,262 @@ def collect_text_quality_metrics(specs: List[BlockSpec], block_text: Dict[str, s
     }
 
 
+def build_codex_block_card(spec: BlockSpec, specs: List[BlockSpec], block_text: Dict[str, str], metrics: Dict[str, object]) -> str:
+    chapter_file = OUT_ROOT / f"ch{spec.chapter:02d}.txt"
+    snapshot = collect_block_status_snapshot(spec, specs, block_text, metrics)
+    current_chars = int(snapshot["current_chars"])
+    target_chars = int(snapshot["target_chars"])
+    block_gap = int(snapshot["block_gap"])
+    paragraphs: List[str] = snapshot["paragraphs"]  # type: ignore[assignment]
+    anchor_cov = float(snapshot["anchor_cov"])
+    citation_count = int(snapshot["citation_count"])
+    current_h3 = int(snapshot["current_h3"])
+    expected_h3 = int(snapshot["expected_h3"])
+    chapter_current_chars = int(snapshot["chapter_current_chars"])
+    chapter_shortfall = int(snapshot["chapter_shortfall"])
+    prev_block = str(snapshot["prev_block"])
+    next_block = str(snapshot["next_block"])
+    weak_spots: List[str] = snapshot["weak_spots"]  # type: ignore[assignment]
+
+    lines = [
+        "[Codex Block Writing Card]",
+        f"Topic: {DISEASE_NAME}",
+        f"Block: {spec.block_id}",
+        f"Subtitle: {spec.subtitle}",
+        f"Chapter file: {chapter_file}",
+        f"Edit scope: only update the content inside [[BLOCK_ID={spec.block_id}]] ... [[END_BLOCK_ID={spec.block_id}]]",
+        "",
+        "[Current Status]",
+        f"- block chars: {current_chars} / target {target_chars} (gap={block_gap})",
+        f"- paragraphs: {len(paragraphs)} | citations: {citation_count} | anchor_cov: {anchor_cov*100:.1f}%",
+        f"- rendered H3: {current_h3}" + (f" / expected {expected_h3}" if expected_h3 else " (summary block)"),
+        f"- chapter chars: {chapter_current_chars} / floor {CHAPTER_MIN_CHARS[spec.chapter]} (shortfall={chapter_shortfall})",
+        "",
+        "[Role In Chapter]",
+        f"- previous block: {prev_block}",
+        f"- next block: {next_block}",
+        f"- focus topics: {join_topic_labels(list(spec.topics))}",
+        f"- evidence IDs: {spec.evidence_ids}",
+        f"- related figures: {spec.fig_ids if spec.fig_ids else 'none'}",
+    ]
+
+    if weak_spots:
+        lines.extend(["", "[Current Weak Spots]"])
+        lines.extend([f"- {item}" for item in weak_spots])
+
+    if is_summary_block(spec.subtitle):
+        lines.extend(
+            [
+                "",
+                "[Summary Rules]",
+                "- Do not add charts or figure discussion.",
+                "- Keep this block around 450-650 chars unless a tighter closing is clearly better.",
+                "- Only close the chapter logic: findings, boundaries, risks, and handoff to the next chapter.",
+            ]
+        )
+    else:
+        lines.extend(["", "[Suggested H3 Skeleton]"])
+        for heading in build_block_h3_suggestions(spec):
+            lines.append(f"- {heading}")
+
+    lines.extend(
+        [
+            "",
+            "[Guard Rails]",
+            "- Every paragraph should contain at least one script-visible anchor such as 2025Q3 / 52.34% / 72小时 / 1周 / 3个月 / CR5 / CAGR / 红旗征 / [3].",
+            "- Distribute citations across paragraphs instead of clustering them only at the end.",
+            "- If evidence is weak, narrow the claim boundary instead of padding with generic language.",
+        ]
+    )
+
+    if spec.chapter == 4:
+        lines.extend(
+            [
+                "- Chapter 4 is Excel-locked: use only ch04_codex_extract.json / ch04_narrative_brief.txt / generated figure scope facts.",
+                "- If a channel dataset, Top10 slice, or CR5 fact is missing, omit that subpoint instead of inventing symmetry.",
+            ]
+        )
+    elif spec.chapter <= 3:
+        lines.append("- Chapters 1-3 should prioritize mechanism, diagnosis, red flags, evidence boundaries, and follow-up timing.")
+    else:
+        lines.append("- Chapters 5-7 should prioritize segmentation, adherence, policy constraints, forecast assumptions, and strategy actions.")
+
+    card_refresh_cmd = f'python scripts/run_pipeline.py --topic "{DISEASE_NAME}" --refresh-progress'
+    lines.extend(
+        [
+            "",
+            "[Done Means]",
+            "- This block reaches or slightly exceeds its target chars without bloating.",
+            "- The block uses the right evidence IDs and does not fabricate new numbering.",
+            "- The block can pass local checks without forcing a full-chapter rewrite.",
+            f"- After editing this block, refresh progress with: {card_refresh_cmd}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def write_codex_block_cards(specs: List[BlockSpec], block_text: Dict[str, str]) -> None:
+    metrics = collect_text_quality_metrics(specs, block_text)
+    card_dir = OUT_ROOT / CODEX_BLOCK_CARD_DIR_NAME
+    refresh_cmd = f'python scripts/run_pipeline.py --topic "{DISEASE_NAME}" --refresh-progress'
+
+    index_lines = [
+        "[Codex Block Cards Index]",
+        f"Topic: {DISEASE_NAME}",
+        f"Folder: {card_dir}",
+        "Use one card at a time when writing or repairing a single block.",
+        f"Refresh command: {refresh_cmd}",
+        "",
+    ]
+
+    for spec in specs:
+        snapshot = collect_block_status_snapshot(spec, specs, block_text, metrics)
+        current_chars = int(snapshot["current_chars"])
+        gap = int(snapshot["block_gap"])
+        citation_count = int(snapshot["citation_count"])
+        weak_flags: List[str] = snapshot["weak_flags"]  # type: ignore[assignment]
+        card_path = card_dir / block_card_filename(spec.block_id)
+        index_lines.append(
+            f"- {spec.block_id} | file={card_path.name} | chapter=ch{spec.chapter:02d}.txt | current={current_chars}/{spec.target_chars} | cites={citation_count} | weak={','.join(weak_flags) if weak_flags else 'none'}"
+        )
+        write_text(card_path, build_codex_block_card(spec, specs, block_text, metrics) + "\n")
+
+    write_text(OUT_ROOT / CODEX_BLOCK_CARDS_NAME, "\n".join(index_lines) + "\n")
+
+
+def build_codex_next_actions(specs: List[BlockSpec], block_text: Dict[str, str], summary_text: str) -> str:
+    metrics = collect_text_quality_metrics(specs, block_text)
+    chapter_chars: Dict[int, int] = metrics["chapter_chars"]  # type: ignore[assignment]
+    chapter_len_fails: List[str] = metrics["chapter_len_fails"]  # type: ignore[assignment]
+    low_anchor_blocks: List[str] = metrics["low_anchor_blocks"]  # type: ignore[assignment]
+    medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
+    overlong_summary_blocks: List[str] = metrics["overlong_summary_blocks"]  # type: ignore[assignment]
+    missing_h3_blocks: List[str] = metrics["missing_h3_blocks"]  # type: ignore[assignment]
+    total_chars = sum(chapter_chars.values()) + len(re.sub(r"\s+", "", summary_text))
+    total_gap = max(0, 30000 - total_chars)
+    refresh_cmd = f'python scripts/run_pipeline.py --topic "{DISEASE_NAME}" --refresh-progress'
+
+    gate_blocked = bool(total_gap > 0 or chapter_len_fails or low_anchor_blocks or medical_density_failed or missing_h3_blocks)
+    mode_line = "Gate recovery mode" if gate_blocked else "Quality polish mode"
+
+    priority_rows: List[Tuple[int, str, str, str]] = []
+    polish_rows: List[Tuple[int, str, str, str]] = []
+
+    for spec in specs:
+        snapshot = collect_block_status_snapshot(spec, specs, block_text, metrics)
+        current_chars = int(snapshot["current_chars"])
+        block_gap = int(snapshot["block_gap"])
+        chapter_shortfall = int(snapshot["chapter_shortfall"])
+        anchor_cov = float(snapshot["anchor_cov"])
+        current_h3 = int(snapshot["current_h3"])
+        expected_h3 = int(snapshot["expected_h3"])
+        weak_flags: List[str] = snapshot["weak_flags"]  # type: ignore[assignment]
+
+        score = 0
+        reasons: List[str] = []
+        action_parts: List[str] = []
+
+        if current_chars == 0:
+            score += 5000
+            reasons.append("block 仍为空")
+            action_parts.append("先写完整首稿")
+        if chapter_shortfall > CHAPTER_CHAR_TOLERANCE:
+            score += 2500 + chapter_shortfall * 5
+            reasons.append(f"章节仍差 {chapter_shortfall} 字")
+            action_parts.append("优先在本章补字")
+        elif chapter_shortfall > 0:
+            score += 900 + chapter_shortfall * 3
+            reasons.append(f"章节仍差 {chapter_shortfall} 字（容差内）")
+            action_parts.append("若顺手可在本块补齐")
+        if block_gap > 0:
+            score += 600 + block_gap * 2
+            reasons.append(f"block 目标差 {block_gap} 字")
+            action_parts.append("补 1 段带锚点内容")
+        if anchor_cov < 0.70:
+            score += 1600 + int((0.70 - anchor_cov) * 1000)
+            reasons.append(f"锚点覆盖仅 {anchor_cov*100:.1f}%")
+            action_parts.append("补 2024/2025Q3/72小时/CR5/[3] 等锚点")
+        elif anchor_cov < 0.85:
+            score += 180
+            reasons.append(f"锚点覆盖偏低 {anchor_cov*100:.1f}%")
+            action_parts.append("新增段落继续带锚点")
+        if (not is_summary_block(spec.subtitle)) and current_h3 < expected_h3:
+            score += 700
+            reasons.append(f"H3 {current_h3}/{expected_h3}")
+            action_parts.append("补足三级标题")
+        if spec.block_id in medical_density_failed:
+            score += 1000
+            reasons.append("医学密度不足")
+            action_parts.append("补机制/诊断/风险/随访节点")
+        if spec.block_id in missing_h3_blocks:
+            score += 700
+            reasons.append("缺少显式三级标题")
+            action_parts.append("按 1.1.1 形式重写段首")
+        if spec.block_id in [item.split("=")[0] for item in overlong_summary_blocks]:
+            score += 220
+            reasons.append("本章小结偏长")
+            action_parts.append("通过后再压缩到 450-650 字")
+
+        if score <= 0:
+            continue
+
+        card_name = block_card_filename(spec.block_id)
+        label = f"{spec.block_id} {spec.subtitle}"
+        reason_text = "；".join(reasons)
+        action_text = "；".join(action_parts) if action_parts else "打开 block card 按最小改动修补"
+        row = (score, label, reason_text, f"{action_text} | card={OUT_ROOT / CODEX_BLOCK_CARD_DIR_NAME / card_name}")
+        if block_gap > 0 or chapter_shortfall > 0 or current_chars == 0 or anchor_cov < 0.70 or spec.block_id in medical_density_failed or spec.block_id in missing_h3_blocks:
+            priority_rows.append(row)
+        else:
+            polish_rows.append(row)
+
+    priority_rows.sort(key=lambda item: item[0], reverse=True)
+    polish_rows.sort(key=lambda item: item[0], reverse=True)
+
+    lines = [
+        "[Codex Next Actions]",
+        f"Topic: {DISEASE_NAME}",
+        f"Current mode: {mode_line}",
+        f"Current total chars: {total_chars} | total gap to 30000: {total_gap}",
+        f"Refresh command: {refresh_cmd}",
+        f"Block card index: {OUT_ROOT / CODEX_BLOCK_CARDS_NAME}",
+        "",
+    ]
+
+    if priority_rows:
+        lines.append("[Priority Blocks]")
+        for idx, (_, label, reason_text, action_text) in enumerate(priority_rows[:8], start=1):
+            lines.append(f"{idx}. {label}")
+            lines.append(f"   why: {reason_text}")
+            lines.append(f"   next: {action_text}")
+    else:
+        lines.append("[Priority Blocks]")
+        lines.append("1. none")
+        lines.append("   why: 当前没有阻塞 stage3 的 block 级问题。")
+        lines.append("   next: 若要再提质，转看 quality polish 项。")
+
+    lines.extend(["", "[Quality Polish]"])
+    if polish_rows:
+        for idx, (_, label, reason_text, action_text) in enumerate(polish_rows[:5], start=1):
+            lines.append(f"{idx}. {label}")
+            lines.append(f"   why: {reason_text}")
+            lines.append(f"   next: {action_text}")
+    else:
+        lines.append("1. none")
+        lines.append("   why: 当前未发现额外 block 级修饰项。")
+        lines.append("   next: 可直接进入 stage3-stage5。")
+
+    lines.extend(
+        [
+            "",
+            "[Working Rule]",
+            "- Always patch the highest-priority block first instead of scanning the whole draft again.",
+            "- After editing 1-3 blocks, run the refresh command once and re-read this file before continuing.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object], summary_text: str) -> str:
     chapter_chars: Dict[int, int] = metrics["chapter_chars"]  # type: ignore[assignment]
     chapter_len_fails: List[str] = metrics["chapter_len_fails"]  # type: ignore[assignment]
@@ -6177,8 +6555,11 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
         "",
         "[Read First]",
         f"- {OUT_ROOT / CODEX_GAP_PANEL_NAME}",
+        f"- {OUT_ROOT / CODEX_NEXT_ACTIONS_NAME}",
         f"- {OUT_ROOT / CHAPTER_PRECHECK_NAME}",
         f"- {OUT_ROOT / CH4_NARRATIVE_BRIEF_NAME}",
+        f"- {OUT_ROOT / CODEX_BLOCK_CARDS_NAME}",
+        f"- {OUT_ROOT / CODEX_BLOCK_CARD_DIR_NAME} (pick the block card you are actively editing)",
         "",
         "[Primary Goal]",
         "- Directly rewrite and overwrite ch01.txt ~ ch07.txt and summary.txt.",
@@ -6270,8 +6651,11 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
         f"4) {OUT_ROOT / 'ch04_codex_extract.json'}",
         f"5) {OUT_ROOT / CH4_NARRATIVE_BRIEF_NAME}",
         f"6) {OUT_ROOT / CODEX_GAP_PANEL_NAME}",
-        f"7) {OUT_ROOT / CHAPTER_PRECHECK_NAME}",
-        f"8) {OUT_ROOT / 'figure_specs.json'} (if present)",
+        f"7) {OUT_ROOT / CODEX_NEXT_ACTIONS_NAME}",
+        f"8) {OUT_ROOT / CHAPTER_PRECHECK_NAME}",
+        f"9) {OUT_ROOT / CODEX_BLOCK_CARDS_NAME}",
+        f"10) {OUT_ROOT / CODEX_BLOCK_CARD_DIR_NAME} (open the card for the block you are drafting)",
+        f"11) {OUT_ROOT / 'figure_specs.json'} (if present)",
         "",
         "[Output Files]",
         f"- {OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
@@ -7389,6 +7773,9 @@ def run_refresh_progress(disease: str, out_base: str | None = "autofile") -> Non
     print(f"已更新：{OUT_ROOT / CODEX_GAP_PANEL_NAME}")
     print(f"已更新：{OUT_ROOT / CHAPTER_PRECHECK_NAME}")
     print(f"已更新：{OUT_ROOT / 'txt_stage_qa.txt'}")
+    print(f"已更新：{OUT_ROOT / CODEX_NEXT_ACTIONS_NAME}")
+    print(f"已更新：{OUT_ROOT / CODEX_BLOCK_CARDS_NAME}")
+    print(f"已更新：{OUT_ROOT / CODEX_BLOCK_CARD_DIR_NAME}")
 
 
 def main() -> None:

@@ -59,7 +59,10 @@ python scripts/run_pipeline.py --all-topics
 - `figure_specs_codex_prompt.txt`
 - `semantic_review_prompt.txt`
 - `codex_gap_panel.txt`
+- `codex_next_actions.txt`
 - `chapter_precheck.txt`
+- `codex_block_cards.txt`
+- `codex_block_cards/`
 - `ch04_narrative_brief.txt`
 
 以下文件改为由当前 Codex 会话主导写入，不再由脚本自动代写：
