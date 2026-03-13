@@ -37,7 +37,7 @@ flowchart LR
 1. 通过 `--topic` 或 `--from-readme` 解析医学主题名。
 2. 若未显式传 `--xlsx`，默认定位到 `data/<医学主题>.xlsx`。
 3. `run()` 固定执行 3 段：
-   - `run_stage1_evidence()`：生成 `00_evidence.txt`、`refs.txt` 和 Codex 前置提示资产。
+   - `run_stage1_evidence()`：生成 `00_evidence.txt`、`refs.txt` 的通用 scaffold 和 Codex 前置提示资产；若当前主题已有 Codex 修订版 evidence/refs，则优先保留。
    - `ensure_codex_prep_assets_ready()`：准备第 4 章结构化数据和写作辅助文件。
    - `run_assist_pipeline()`：串行执行 `stage3 -> stage4 -> stage5`。
 4. 第 4 章结构化数据来自 `ch04_codex_extract.json`：

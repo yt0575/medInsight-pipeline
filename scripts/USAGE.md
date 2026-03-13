@@ -14,6 +14,14 @@ python scripts/run_pipeline.py --topic "肠黏膜修复"
 
 - `autofile/肠黏膜修复/`
 
+## 写稿中途自检
+
+```powershell
+python scripts/run_pipeline.py --topic "肠黏膜修复" --refresh-progress
+```
+
+该命令只刷新 `codex_gap_panel.txt`、`chapter_precheck.txt`、`txt_stage_qa.txt`，适合 Codex 写完 2-3 个 block 后快速复核，不会触发出图或 docx 装配。
+
 ## 批量运行
 
 ```powershell
@@ -34,6 +42,7 @@ python scripts/run_pipeline.py --all-topics
 - `--template "template.docx"`：覆盖模板路径
 - `--out-base "autofile"`：覆盖输出根目录
 - `--lite-output`：清理中间产物，仅保留最终 docx、QA 与日志
+- `--refresh-progress`：只刷新 `codex_gap_panel.txt`、`chapter_precheck.txt`、`txt_stage_qa.txt`，用于 Codex 写稿中途自检，不生成图表或 docx
 
 若某个 Excel 只包含 `医院品类/医院top`，脚本会自动把缺失的药店端/线上端季度值按 `0` 补齐，并将缺失渠道的 Top10/CR5 保持为空，同时在 `ch04_sheet_map.txt` 中标记。
 
@@ -59,6 +68,11 @@ python scripts/run_pipeline.py --all-topics
 - `figure_specs.json`（按需）
 - `ch01.txt` ~ `ch07.txt`
 - `summary.txt`
+
+说明：
+
+- `00_evidence.txt` 与 `refs.txt` 默认可由脚本生成通用 scaffold。
+- 若当前主题目录下这两个文件已由 Codex 会话修订并带有 `# authored_by=codex` 标记，后续重跑会优先保留，不再覆盖。
 
 ## 图表导出说明
 

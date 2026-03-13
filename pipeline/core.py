@@ -14,6 +14,7 @@ import json
 import math
 import re
 import shutil
+import subprocess
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -115,6 +116,8 @@ DOCX_BODY_STYLE_NAME = "数据报告正文"
 DOCX_FIGURE_WIDTH_INCH = 5.6
 DOCX_BODY_FONT_FALLBACK = "宋体"
 DOCX_BODY_FONT_SIZE_PT_FALLBACK = 12.0
+CODEX_AUTHORED_MARKER = "# authored_by=codex"
+PIPELINE_SCAFFOLD_MARKER = "# generated_by=pipeline_scaffold"
 _SOURCE_FOOTER_FONT_PATH_CACHE: Dict[str, str] = {}
 _DOCX_BODY_FONT_CACHE: Tuple[str | None, float | None] | None = None
 _DOCX_BODY_FONT_CACHE_PATH: Path | None = None
@@ -2349,212 +2352,8 @@ def write_codex_progress_assets(
 
 
 def build_evidence_and_refs() -> Tuple[str, str]:
-    def to_ref(idx: int, title: str, org: str, year: str, url: str, dtype: str = "EB/OL") -> str:
-        y = year if re.search(r"(19|20)\d{2}", str(year)) else "2024"
-        return f"[{idx}] {org}. {title}[{dtype}]. {y}. {url}"
-
-    if is_cervical_profile():
-        evidence = [
-            ("E01", "Musculoskeletal conditions", "World Health Organization", "2022", "肌肉骨骼疾病负担及残疾影响", "https://www.who.int/news-room/fact-sheets/detail/musculoskeletal-conditions"),
-            ("E02", "颈椎病康复诊疗专家共识", "中国康复医学会", "2021", "分层康复路径、功能评估与复评窗口", "https://guide.medlive.cn/guideline/27562"),
-            ("E03", "颈椎病诊疗与手术指征专家共识", "中华医学会骨科相关学组", "2020", "保守治疗、介入与手术分层决策", "https://guide.medlive.cn/guideline/24306"),
-            ("E04", "国家基本医疗保险、工伤保险和生育保险药品目录（2024年）", "国家医疗保障局", "2024", "支付规则影响药物可及性与处方结构", "https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html"),
-            ("E05", "国家医疗质量安全改进目标（骨科相关）", "国家卫生健康委员会", "2024", "医疗质量指标与分级诊疗执行要求", "https://www.nhc.gov.cn/yzygj/s7659/"),
-            ("E06", "Diagnosis and Treatment of Cervical Radiculopathy", "North American Spine Society", "2020", "神经根型颈椎病的诊断评估与治疗建议", "https://www.spine.org/ResearchClinicalCare/QualityImprovement/ClinicalGuidelines"),
-            ("E07", "Cervical Myelopathy", "American Association of Neurological Surgeons", "2024", "脊髓型颈椎病红旗征与转诊建议", "https://www.aans.org/Patients/Neurosurgical-Conditions-and-Treatments/Cervical-Myelopathy"),
-            ("E08", "国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "老龄化、职业久坐与颈椎疾病需求变化", "https://www.stats.gov.cn/"),
-            ("E09", "药品说明书修订公告汇总", "中国食品药品检定研究院", "2024", "镇痛、肌松及神经营养类药品标签更新", "https://www.cpi.ac.cn/tggg/ypsmsxdgg/"),
-            ("E10", "中国卫生健康统计年鉴及国家统计数据库", "国家卫生健康委员会/国家统计局", "2024", "门急诊就诊量与骨科康复服务供给变化", "https://www.stats.gov.cn/"),
-            ("E11", "颈椎病外科治疗与围手术期管理共识", "中华外科相关学组", "2021", "手术适应证、并发症管理与随访标准", "https://guide.medlive.cn/guideline/27112"),
-            ("E12", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
-            ("E13", "颈肩痛诊疗与慢性疼痛管理共识", "中国疼痛医学相关学会", "2022", "疼痛分层、功能结局与长期管理", "https://guide.medlive.cn/guideline/28605"),
-            ("E14", "中医骨伤科颈椎病诊疗指南", "中国中医药相关学会", "2021", "中医辨证分型与针灸推拿干预建议", "https://guide.medlive.cn/guideline/26067"),
-            ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
-        ]
-    elif is_sciatica_profile():
-        evidence = [
-            ("E01", "Musculoskeletal conditions", "World Health Organization", "2022", "肌肉骨骼疾病负担持续上升，腰背痛与神经根痛管理需求显著", "https://www.who.int/news-room/fact-sheets/detail/musculoskeletal-conditions"),
-            ("E02", "Low back pain and sciatica in over 16s: assessment and management", "National Institute for Health and Care Excellence", "2020", "坐骨神经痛诊断、影像时机、保守治疗与转诊路径建议", "https://www.nice.org.uk/guidance/ng59"),
-            ("E03", "Lumbar Disc Herniation with Radiculopathy", "North American Spine Society", "2012", "腰椎间盘突出伴神经根病的评估、保守治疗、介入与手术证据", "https://www.spine.org/ResearchClinicalCare/QualityImprovement/ClinicalGuidelines"),
-            ("E04", "2025年版国家基本医疗保险、生育保险和工伤保险药品目录和商业健康保险创新药品目录", "国家医疗保障局/人力资源社会保障部", "2025", "支付范围与目录动态调整影响镇痛、辅助治疗和院外可及性", "https://www.nhsa.gov.cn/art/2025/12/7/art_14_18972.html"),
-            ("E05", "2025年国家医疗质量安全改进目标", "国家卫生健康委员会", "2025", "强化医疗质量目标管理，推动骨科、康复和疼痛相关质量改进", "https://www.nhc.gov.cn/yzygj/c100068/202503/ad63fb8ce9e24013a68db52049ecc524.shtml"),
-            ("E06", "Herniated Disc", "American Association of Neurological Surgeons", "2024", "多数神经根痛可先行保守治疗，但持续症状和神经缺损需升级评估", "https://www.aans.org/patients/conditions-treatments/herniated-disc/"),
-            ("E07", "Cauda Equina Syndrome", "American Association of Neurological Surgeons", "2024", "马尾综合征红旗征包括尿潴留、鞍区麻木和进行性肌力下降", "https://www.aans.org/patients/conditions-treatments/cauda-equina-syndrome/"),
-            ("E08", "2025年年末人口数及其构成", "国家统计局", "2026", "老龄化、城镇就业与职业负荷结构变化影响腰腿痛与康复需求", "https://www.stats.gov.cn/zt_18555/zthd/lhfw/2026lhzt/2026hgjj/202602/t20260228_1962667.html"),
-            ("E09", "药品说明书修订公告专栏", "中国食品药品检定研究院/国家药监局", "2025", "说明书修订与风险提示持续影响镇痛药和辅助治疗药物的合规使用", "https://www.cpi.ac.cn/tggg/ypsmsxdgg/"),
-            ("E10", "2024年我国卫生健康事业发展统计公报新闻解读稿", "国家卫生健康委员会", "2025", "门诊、住院和基层服务量变化为骨科疼痛与康复资源配置提供背景", "https://www.nhc.gov.cn/guihuaxxs/c100132/202512/9db8db5488a748c4b1e1068a4a8c4455.shtml"),
-            ("E11", "专家解读《中国人群身体活动指南（2021）》", "国家卫生健康委员会", "2021", "身体活动与分层运动处方是慢性腰腿痛长期管理的重要基础", "https://www.nhc.gov.cn/wjw/ftsp/202112/44e8325ad5934eb0b42b2987e3148315.shtml"),
-            ("E12", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院、药店、线上三端季度销售额与Top品种比较基础", f"{EXCEL_PATH.name}"),
-            ("E13", "How effective are physiotherapy interventions in treating people with sciatica? A systematic review and meta-analysis", "PubMed", "2023", "物理治疗是首线保守治疗的重要组成，但疗效受方案与人群分层影响", "https://pubmed.ncbi.nlm.nih.gov/36580149/"),
-            ("E14", "Acupuncture vs Sham Acupuncture for Chronic Sciatica From Herniated Disk: A Randomized Clinical Trial", "PubMed", "2024", "针刺对慢性坐骨神经痛疼痛和功能改善具有循证支持", "https://pubmed.ncbi.nlm.nih.gov/39401008/"),
-            ("E15", "法规文件", "国家药品监督管理局", "2025", "药品全生命周期监管、说明书合规和院外传播边界持续收紧", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
-        ]
-    elif is_functional_dyspepsia_profile():
-        evidence = [
-            ("E01", "ACG and CAG Clinical Guideline: Management of Dyspepsia", "American Journal of Gastroenterology", "2017", "功能性消化不良的年龄分层、内镜时机与 Hp test-and-treat 路径", "https://pubmed.ncbi.nlm.nih.gov/28631728/"),
-            ("E02", "British Society of Gastroenterology guidelines on the management of functional dyspepsia", "Gut", "2022", "FD 的诊断、脑肠轴管理、药物与心理行为干预建议", "https://gut.bmj.com/content/71/9/1697"),
-            ("E03", "Functional dyspepsia and overlap management evidence", "Rome Foundation/临床综述", "2023", "Rome IV 下 PDS/EPS 分型及重叠疾病管理边界", "https://www.theromefoundation.org"),
-            ("E04", "Functional Dyspepsia: Current Understanding and Future Perspective", "PubMed", "2023", "胃适应性受损、胃排空异常、内脏高敏和微炎症等机制", "https://pubmed.ncbi.nlm.nih.gov/37598673/"),
-            ("E05", "Global prevalence of functional dyspepsia according to Rome criteria, 1990-2020", "PubMed", "2024", "FD 全球患病率与 Rome 标准差异", "https://pubmed.ncbi.nlm.nih.gov/38378941/"),
-            ("E06", "Role of Low-FODMAP diet in functional dyspepsia", "PubMed", "2023", "饮食管理在 FD 长期症状控制中的定位", "https://pubmed.ncbi.nlm.nih.gov/37094910/"),
-            ("E07", "第五次全国幽门螺杆菌感染处理共识报告", "中华消化杂志", "2022", "消化不良人群中 Hp 检测、根除方案与复查窗口", "https://rs.yiigle.com/cmaid/1413767"),
-            ("E08", "Maastricht VI/Florence consensus report", "Gut", "2022", "Hp 管理国际推荐与功能性消化不良相关策略", "https://gut.bmj.com/content/71/9/1724"),
-            ("E09", "国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "人口结构变化影响功能性消化不良就医需求与院外管理", "https://www.stats.gov.cn/"),
-            ("E10", "国家基本医疗保险药品目录（2024年）", "国家医疗保障局", "2024", "支付规则影响抑酸、促动力与消化酶等用药可及性", "https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html"),
-            ("E11", "国家医保局2024年药品目录调整新闻发布会", "国家医疗保障局", "2024", "目录准入与临床价值导向影响功能性消化不良用药结构", "https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html"),
-            ("E12", "中国卫生健康统计年鉴及国家统计数据库", "国家卫生健康委员会/国家统计局", "2024", "门急诊与消化系统服务供给变化", "https://www.stats.gov.cn/"),
-            ("E13", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
-            ("E14", "The Usefulness of Symptom-based Subtypes of Functional Dyspepsia", "PubMed", "2021", "PDS/EPS 分型对病理机制和治疗选择的提示价值", "https://pubmed.ncbi.nlm.nih.gov/34210898/"),
-            ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "药品全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
-        ]
-    elif is_gastritis_profile():
-        evidence = [
-            ("E01", "中国慢性胃炎诊治指南（2022年，上海）", "中华消化杂志", "2023", "慢性胃炎定义、分型、诊断与治疗路径", "https://rs.yiigle.com/cmaid/1473570"),
-            ("E02", "第五次全国幽门螺杆菌感染处理共识报告", "中华消化杂志", "2022", "Hp检测方法、根除方案与复查窗口", "https://rs.yiigle.com/cmaid/1413767"),
-            ("E03", "Kyoto global consensus report on gastritis", "Gut", "2015", "胃炎病因学、分类与胃癌风险链路", "https://gut.bmj.com/content/64/9/1353"),
-            ("E04", "Maastricht VI/Florence consensus report", "Gut", "2022", "幽门螺杆菌感染管理国际推荐", "https://gut.bmj.com/content/71/9/1724"),
-            ("E05", "ACG Guideline on Treatment of Helicobacter pylori Infection", "American Journal of Gastroenterology", "2024", "Hp根除治疗推荐与耐药背景下方案选择", "https://journals.lww.com/ajg/abstract/2024/10000/acg_clinical_guideline__treatment_of_helicobacter.13.aspx"),
-            ("E06", "Global Cancer Observatory: Stomach cancer fact sheet", "IARC/WHO", "2024", "胃癌疾病负担与流行病学对比", "https://gco.iarc.who.int/media/globocan/factsheets/cancers/7-stomach-fact-sheet.pdf"),
-            ("E07", "Diagnosis and treatment protocol for chronic gastritis (China)", "中国临床相关指南解读", "2022", "慢性胃炎临床分层与治疗终点", "https://pmc.ncbi.nlm.nih.gov/articles/PMC9602100/"),
-            ("E08", "国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "人口结构与就医需求变化", "https://www.stats.gov.cn/"),
-            ("E09", "国家基本医疗保险药品目录（2024年）", "国家医疗保障局", "2024", "支付规则影响抑酸/胃黏膜保护等用药可及性", "https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html"),
-            ("E10", "国家医保局2024年药品目录调整新闻发布会", "国家医疗保障局", "2024", "目录准入价值导向与支付口径", "https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html"),
-            ("E11", "中国卫生健康统计年鉴及国家统计数据库", "国家卫生健康委员会/国家统计局", "2024", "门急诊及消化系统疾病服务供给变化", "https://www.stats.gov.cn/"),
-            ("E12", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
-            ("E13", "Management of epithelial precancerous conditions and lesions in the stomach", "MAPS II Guideline", "2019", "胃癌前病变随访分层与内镜病理管理", "https://pubmed.ncbi.nlm.nih.gov/30841008/"),
-            ("E14", "Functional dyspepsia and overlap management evidence", "Rome Foundation/临床综述", "2023", "功能性消化不良与胃炎相关症状管理边界", "https://www.theromefoundation.org"),
-            ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "药品全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
-        ]
-    elif is_respiratory_profile():
-        evidence = [
-            ("E01", "Pneumonia (Fact sheet)", "World Health Organization", "2024", "儿童呼吸道疾病负担、死亡风险与干预重点", "https://www.who.int/en/news-room/fact-sheets/detail/pneumonia"),
-            ("E02", "儿童社区获得性肺炎诊疗规范（2019年版）", "国家中医药管理局/国家卫健委", "2019", "分级诊疗、病情评估与规范用药路径", "https://www.natcm.gov.cn/bangongshi/zhengcewenjian/2019-02-13/9022.html"),
-            ("E03", "儿童腺病毒肺炎诊疗规范（2019年版）", "国家卫生健康委员会", "2019", "重症识别、监测指标与动态评估", "https://www.nhc.gov.cn/ylyjs/zcwj/201906/6ef61f110a5548a489b6be3fc1674bc7.shtml"),
-            ("E04", "国家基本医疗保险、工伤保险和生育保险药品目录（2024年）", "国家医疗保障局", "2024", "支付规则影响可及性与处方结构", "https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html"),
-            ("E05", "国家医保局2024年药品目录调整新闻发布会", "国家医疗保障局", "2024", "目录调整原则与临床价值导向", "https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html"),
-            ("E06", "PRAC recommends restrictions on use of codeine for cough and cold in children", "European Medicines Agency", "2015", "儿童镇咳成分年龄与安全边界", "https://www.ema.europa.eu/en/news/prac-recommends-restrictions-use-codeine-cough-cold-children"),
-            ("E07", "FDA Drug Safety Communication: Codeine and Tramadol in Children", "U.S. Food and Drug Administration", "2017", "儿童使用可待因/曲马多的禁忌与风险警示", "https://www.fda.gov/drugs/drug-safety-and-availability"),
-            ("E08", "国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "儿童人群规模与区域分布变化", "https://www.stats.gov.cn/"),
-            ("E09", "药品说明书修订公告汇总", "中国食品药品检定研究院", "2024", "说明书标签与警示信息更新", "https://www.cpi.ac.cn/tggg/ypsmsxdgg/"),
-            ("E10", "中国统计年鉴及国家统计数据库", "国家统计局", "2024", "长期趋势对终端需求的结构性影响", "https://www.stats.gov.cn/"),
-            ("E11", "儿童肺炎链球菌疾病诊疗和预防专家共识", "中华医学会儿科学分会等", "2020", "临床分层、预防与治疗要点", "https://rs.yiigle.com/cmaid/1297364"),
-            ("E12", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
-            ("E13", "中国儿童慢性咳嗽诊断与治疗指南（2021）", "中华儿科杂志", "2021", "病程分类、红旗征与诊疗路径", "https://guide.medlive.cn/guideline/26694"),
-            ("E14", "儿童咳嗽中西医结合诊治专家共识", "中西医结合相关学会", "2021", "中西医协同分层与处置建议", "https://guide.medlive.cn/guideline/23735"),
-            ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
-        ]
-    else:
-        dynamic = fetch_pubmed_evidence(DISEASE_NAME, max_items=8)
-        evidence = []
-        eid = 1
-        for title, org, year, keypoint, url in dynamic:
-            evidence.append((f"E{eid:02d}", title, org, year, keypoint, url))
-            eid += 1
-            if eid > 8:
-                break
-        fallback_dynamic = [
-            (f"{DISEASE_NAME}诊疗指南与共识检索（PubMed）", "PubMed", "2024", "用于补充疾病特异性指南/共识证据", f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(disease_query_term(DISEASE_NAME) + ' guideline consensus')}"),
-            (f"{DISEASE_NAME}系统综述检索（PubMed）", "PubMed", "2024", "用于补充治疗终点与人群分层证据", f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(disease_query_term(DISEASE_NAME) + ' systematic review treatment')}"),
-        ]
-        while len(evidence) < 8:
-            title, org, year, keypoint, url = fallback_dynamic[(len(evidence) - len(dynamic)) % len(fallback_dynamic)]
-            evidence.append((f"E{len(evidence)+1:02d}", title, org, year, keypoint, url))
-        evidence.extend(
-            [
-                ("E09", "国家基本医疗保险、工伤保险和生育保险药品目录（2024年）", "国家医疗保障局", "2024", "支付规则影响可及性与处方结构", "https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html"),
-                ("E10", "国家医保局2024年药品目录调整新闻发布会", "国家医疗保障局", "2024", "目录调整原则与临床价值导向", "https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html"),
-                ("E11", "国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "人口结构与就医需求变化", "https://www.stats.gov.cn/"),
-                ("E12", "米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
-                ("E13", "中国卫生健康统计年鉴及国家统计数据库", "国家卫生健康委员会/国家统计局", "2024", "长期趋势对终端需求的结构性影响", "https://www.stats.gov.cn/"),
-                ("E14", "药品说明书修订公告汇总", "中国食品药品检定研究院", "2024", "说明书标签与警示信息更新", "https://www.cpi.ac.cn/tggg/ypsmsxdgg/"),
-                ("E15", "国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
-            ]
-        )
-
-    evidence_lines = ["证据ID|标题|机构/作者|年份|要点|可追溯来源"]
-    for e in evidence:
-        evidence_lines.append("|".join(e))
-
-    if is_cervical_profile():
-        refs = [
-            "[1] World Health Organization. Musculoskeletal conditions[EB/OL]. 2022. https://www.who.int/news-room/fact-sheets/detail/musculoskeletal-conditions",
-            "[2] 中国康复医学会. 颈椎病康复诊疗专家共识[S/OL]. 2021. https://guide.medlive.cn/guideline/27562",
-            "[3] 中华医学会骨科相关学组. 颈椎病诊疗与手术指征专家共识[S/OL]. 2020. https://guide.medlive.cn/guideline/24306",
-            "[4] 国家医疗保障局. 国家基本医疗保险、工伤保险和生育保险药品目录（2024年）[S/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html",
-            "[5] 国家卫生健康委员会. 国家医疗质量安全改进目标（骨科相关）[S/OL]. 2024. https://www.nhc.gov.cn/yzygj/s7659/",
-            "[6] North American Spine Society. Diagnosis and Treatment of Cervical Radiculopathy[EB/OL]. 2020. https://www.spine.org/ResearchClinicalCare/QualityImprovement/ClinicalGuidelines",
-            "[7] American Association of Neurological Surgeons. Cervical Myelopathy[EB/OL]. 2024. https://www.aans.org/Patients/Neurosurgical-Conditions-and-Treatments/Cervical-Myelopathy",
-            "[8] 国家统计局. 国家统计数据发布平台（人口与社会）[DB/OL]. 2024. https://www.stats.gov.cn/",
-            "[9] 中国食品药品检定研究院. 药品说明书修订公告汇总[EB/OL]. 2024. https://www.cpi.ac.cn/tggg/ypsmsxdgg/",
-            "[10] 国家卫生健康委员会/国家统计局. 中国卫生健康统计年鉴及国家统计数据库[DB/OL]. 2024. https://www.stats.gov.cn/",
-            "[11] 中华外科相关学组. 颈椎病外科治疗与围手术期管理共识[J/OL]. 2021. https://guide.medlive.cn/guideline/27112",
-            f"[12] 米内网/项目数据. {EXCEL_PATH.name}（医院/药店/线上口径）[DB]. 2025.",
-            "[13] 中国疼痛医学相关学会. 颈肩痛诊疗与慢性疼痛管理共识[S/OL]. 2022. https://guide.medlive.cn/guideline/28605",
-            "[14] 中国中医药相关学会. 中医骨伤科颈椎病诊疗指南[S/OL]. 2021. https://guide.medlive.cn/guideline/26067",
-            "[15] 国家药品监督管理局. 法规文件索引与政策发布[EB/OL]. 2024. https://www.nmpa.gov.cn/xxgk/fgwj/",
-        ]
-    elif is_functional_dyspepsia_profile():
-        refs = [
-            "[1] American Journal of Gastroenterology. ACG and CAG Clinical Guideline: Management of Dyspepsia[EB/OL]. 2017. https://pubmed.ncbi.nlm.nih.gov/28631728/",
-            "[2] Gut. British Society of Gastroenterology guidelines on the management of functional dyspepsia[EB/OL]. 2022. https://gut.bmj.com/content/71/9/1697",
-            "[3] Rome Foundation. Functional dyspepsia and overlap management evidence[EB/OL]. 2023. https://www.theromefoundation.org/",
-            "[4] PubMed. Functional Dyspepsia: Current Understanding and Future Perspective[EB/OL]. 2023. https://pubmed.ncbi.nlm.nih.gov/37598673/",
-            "[5] PubMed. Global prevalence of functional dyspepsia according to Rome criteria, 1990-2020[EB/OL]. 2024. https://pubmed.ncbi.nlm.nih.gov/38378941/",
-            "[6] PubMed. Role of Low-FODMAP diet in functional dyspepsia[EB/OL]. 2023. https://pubmed.ncbi.nlm.nih.gov/37094910/",
-            "[7] 中华消化杂志. 第五次全国幽门螺杆菌感染处理共识报告[S/OL]. 2022. https://rs.yiigle.com/cmaid/1413767",
-            "[8] Gut. Maastricht VI/Florence consensus report[EB/OL]. 2022. https://gut.bmj.com/content/71/9/1724",
-            "[9] 国家统计局. 国家统计数据发布平台（人口与社会）[DB/OL]. 2024. https://www.stats.gov.cn/",
-            "[10] 国家医疗保障局. 国家基本医疗保险、工伤保险和生育保险药品目录（2024年）[S/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html",
-            "[11] 国家医疗保障局. 2024年药品目录调整新闻发布会[EB/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html",
-            "[12] 国家卫生健康委员会/国家统计局. 中国卫生健康统计年鉴及国家统计数据库[DB/OL]. 2024. https://www.stats.gov.cn/",
-            f"[13] 米内网/项目数据. {EXCEL_PATH.name}（医院/药店/线上口径）[DB]. 2025.",
-            "[14] PubMed. The Usefulness of Symptom-based Subtypes of Functional Dyspepsia[EB/OL]. 2021. https://pubmed.ncbi.nlm.nih.gov/34210898/",
-            "[15] 国家药品监督管理局. 法规文件索引与政策发布[EB/OL]. 2024. https://www.nmpa.gov.cn/xxgk/fgwj/",
-        ]
-    elif is_gastritis_profile():
-        refs = [
-            "[1] 中华消化杂志. 中国慢性胃炎诊治指南（2022年，上海）[S/OL]. 2023. https://rs.yiigle.com/cmaid/1473570",
-            "[2] 中华消化杂志. 第五次全国幽门螺杆菌感染处理共识报告[S/OL]. 2022. https://rs.yiigle.com/cmaid/1413767",
-            "[3] Gut. Kyoto global consensus report on gastritis[EB/OL]. 2015. https://gut.bmj.com/content/64/9/1353",
-            "[4] Gut. Maastricht VI/Florence consensus report[EB/OL]. 2022. https://gut.bmj.com/content/71/9/1724",
-            "[5] American Journal of Gastroenterology. ACG clinical guideline: treatment of Helicobacter pylori infection[EB/OL]. 2024. https://journals.lww.com/ajg/abstract/2024/10000/acg_clinical_guideline__treatment_of_helicobacter.13.aspx",
-            "[6] IARC/WHO. Global Cancer Observatory: Stomach cancer fact sheet[EB/OL]. 2024. https://gco.iarc.who.int/media/globocan/factsheets/cancers/7-stomach-fact-sheet.pdf",
-            "[7] PMC. Diagnosis and treatment protocol for chronic gastritis in China[EB/OL]. 2022. https://pmc.ncbi.nlm.nih.gov/articles/PMC9602100/",
-            "[8] 国家统计局. 国家统计数据发布平台（人口与社会）[DB/OL]. 2024. https://www.stats.gov.cn/",
-            "[9] 国家医疗保障局. 国家基本医疗保险、工伤保险和生育保险药品目录（2024年）[S/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html",
-            "[10] 国家医疗保障局. 2024年药品目录调整新闻发布会[EB/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html",
-            "[11] 国家卫生健康委员会/国家统计局. 中国卫生健康统计年鉴及国家统计数据库[DB/OL]. 2024. https://www.stats.gov.cn/",
-            f"[12] 米内网/项目数据. {EXCEL_PATH.name}（医院/药店/线上口径）[DB]. 2025.",
-            "[13] PubMed. Management of epithelial precancerous conditions and lesions in the stomach (MAPS II)[EB/OL]. 2019. https://pubmed.ncbi.nlm.nih.gov/30841008/",
-            "[14] Rome Foundation. Functional dyspepsia and overlap management evidence[EB/OL]. 2023. https://www.theromefoundation.org/",
-            "[15] 国家药品监督管理局. 法规文件索引与政策发布[EB/OL]. 2024. https://www.nmpa.gov.cn/xxgk/fgwj/",
-        ]
-    elif is_respiratory_profile():
-        refs = [
-            "[1] World Health Organization. Pneumonia (Fact sheet)[EB/OL]. 2024. https://www.who.int/en/news-room/fact-sheets/detail/pneumonia",
-            "[2] 国家中医药管理局. 儿童社区获得性肺炎诊疗规范（2019年版）[S/OL]. 2019. https://www.natcm.gov.cn/bangongshi/zhengcewenjian/2019-02-13/9022.html",
-            "[3] 国家卫生健康委员会. 儿童腺病毒肺炎诊疗规范（2019年版）[S/OL]. 2019. https://www.nhc.gov.cn/ylyjs/zcwj/201906/6ef61f110a5548a489b6be3fc1674bc7.shtml",
-            "[4] 国家医疗保障局. 国家基本医疗保险、工伤保险和生育保险药品目录（2024年）[S/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html",
-            "[5] 国家医疗保障局. 2024年药品目录调整新闻发布会[EB/OL]. 2024. https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html",
-            "[6] European Medicines Agency. PRAC recommends restrictions on use of codeine for cough and cold in children[EB/OL]. 2015. https://www.ema.europa.eu/en/news/prac-recommends-restrictions-use-codeine-cough-cold-children",
-            "[7] U.S. Food and Drug Administration. Drug Safety Communication: Use of Codeine and Tramadol in Children[EB/OL]. 2017. https://www.fda.gov/drugs/drug-safety-and-availability",
-            "[8] 国家统计局. 国家统计数据发布平台（人口与社会）[DB/OL]. 2024. https://www.stats.gov.cn/",
-            "[9] 中国食品药品检定研究院. 药品说明书修订公告汇总[EB/OL]. 2024. https://www.cpi.ac.cn/tggg/ypsmsxdgg/",
-            "[10] 国家统计局. 中国统计年鉴及国家统计数据库[DB/OL]. 2024. https://www.stats.gov.cn/",
-            "[11] 中华医学会儿科学分会等. 儿童肺炎链球菌疾病诊疗和预防专家共识[J/OL]. 2020. https://rs.yiigle.com/cmaid/1297364",
-            f"[12] 米内网/项目数据. {EXCEL_PATH.name}（医院/药店/线上口径）[DB]. 2025.",
-            "[13] 中华儿科杂志. 中国儿童慢性咳嗽诊断与治疗指南（2021）[S/OL]. 2021. https://guide.medlive.cn/guideline/26694",
-            "[14] 儿童咳嗽中西医结合诊治专家共识[S/OL]. 2021. https://guide.medlive.cn/guideline/23735",
-            "[15] 国家药品监督管理局. 法规文件索引与政策发布[EB/OL]. 2024. https://www.nmpa.gov.cn/xxgk/fgwj/",
-        ]
-    else:
-        refs = []
-        for i, e in enumerate(evidence, start=1):
-            _, title, org, year, _, url = e
-            dtype = "DB" if (EXCEL_PATH.name in url) else "EB/OL"
-            refs.append(to_ref(i, title, org, year, url, dtype=dtype))
-
-    return "\n".join(evidence_lines), "\n".join(refs)
+    """Legacy profile-specific evidence packs were removed in favor of Codex-first generation."""
+    return build_generic_evidence_and_refs()
 
 
 @dataclass
@@ -2938,10 +2737,67 @@ def clean_title_prefix(subtitle: str, text: str) -> str:
 
 
 def write_evidence_and_refs() -> Tuple[str, str]:
-    evidence_text, refs_text = build_evidence_and_refs()
-    write_text(OUT_ROOT / "00_evidence.txt", evidence_text + "\n")
-    write_text(OUT_ROOT / "refs.txt", refs_text + "\n")
+    evidence_path = OUT_ROOT / "00_evidence.txt"
+    refs_path = OUT_ROOT / "refs.txt"
+    if should_preserve_codex_evidence_bundle(evidence_path, refs_path):
+        return evidence_path.read_text(encoding="utf-8"), refs_path.read_text(encoding="utf-8")
+
+    evidence_text, refs_text = build_generic_evidence_and_refs()
+    write_text(evidence_path, evidence_text + "\n")
+    write_text(refs_path, refs_text + "\n")
     return evidence_text, refs_text
+
+
+def should_preserve_codex_evidence_bundle(evidence_path: Path, refs_path: Path) -> bool:
+    if not evidence_path.exists() or not refs_path.exists():
+        return False
+    try:
+        evidence_lines = [line.strip() for line in evidence_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        refs_lines = [line.strip() for line in refs_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except Exception:
+        return False
+    if not evidence_lines or not refs_lines:
+        return False
+    return evidence_lines[0] == CODEX_AUTHORED_MARKER and refs_lines[0] == CODEX_AUTHORED_MARKER
+
+
+def build_generic_evidence_and_refs() -> Tuple[str, str]:
+    dynamic = fetch_pubmed_evidence(DISEASE_NAME, max_items=8)
+    evidence: List[Tuple[str, str, str, str, str, str]] = []
+    for idx, (title, org, year, keypoint, url) in enumerate(dynamic[:8], start=1):
+        evidence.append((f"E{idx:02d}", title, org, year, keypoint, url))
+
+    generic_scaffold = [
+        ("国家药监局药品数据查询平台（请核对说明书/批准文号）", "国家药品监督管理局", "2024", "用于核对说明书、批准文号、剂型、适应证和监管主体", "https://www.nmpa.gov.cn/datasearch/home-index.html"),
+        (f"{DISEASE_NAME} guideline consensus 检索", "PubMed", "2024", "用于补充主题相关指南/共识证据，由当前 Codex 会话筛选有效来源", f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(disease_query_term(DISEASE_NAME) + ' guideline consensus')}"),
+        (f"{DISEASE_NAME} systematic review 检索", "PubMed", "2024", "用于补充系统综述与治疗终点证据，由当前 Codex 会话筛选有效来源", f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(disease_query_term(DISEASE_NAME) + ' systematic review treatment')}"),
+        ("国家基本医疗保险、工伤保险和生育保险药品目录（2024年）", "国家医疗保障局", "2024", "支付规则影响院内外可及性与处方结构", "https://www.nhsa.gov.cn/art/2024/11/28/art_53_14887.html"),
+        ("国家医保局2024年药品目录调整新闻发布会", "国家医疗保障局", "2024", "目录调整原则与临床价值导向", "https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html"),
+        ("国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "人口结构与就医需求变化", "https://www.stats.gov.cn/"),
+        ("中国卫生健康统计年鉴及国家统计数据库", "国家卫生健康委员会/国家统计局", "2024", "长期趋势对终端需求和专科服务供给的影响", "https://www.stats.gov.cn/"),
+        ("米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
+        ("国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
+    ]
+
+    needed = 15 - len(evidence)
+    scaffold_idx = 0
+    while needed > 0:
+        title, org, year, keypoint, url = generic_scaffold[scaffold_idx % len(generic_scaffold)]
+        evidence.append((f"E{len(evidence)+1:02d}", title, org, year, keypoint, url))
+        scaffold_idx += 1
+        needed -= 1
+
+    evidence_lines = [PIPELINE_SCAFFOLD_MARKER, "证据ID|标题|机构/作者|年份|要点|可追溯来源"]
+    for entry in evidence:
+        evidence_lines.append("|".join(entry))
+
+    refs_lines = [PIPELINE_SCAFFOLD_MARKER]
+    for idx, entry in enumerate(evidence, start=1):
+        _, title, org, year, _, url = entry
+        dtype = "DB" if (EXCEL_PATH.name in url) else "EB/OL"
+        refs_lines.append(f"[{idx}] {org}. {title}[{dtype}]. {year}. {url}")
+
+    return "\n".join(evidence_lines), "\n".join(refs_lines)
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -5875,6 +5731,47 @@ def post_process_docx_xml(docx_path: Path) -> None:
     shutil.move(tmp, docx_path)
 
 
+def refresh_docx_fields_with_word(docx_path: Path) -> bool:
+    if not docx_path.exists():
+        return False
+    escaped = str(docx_path).replace("'", "''")
+    ps = (
+        "$word=$null;"
+        "try {"
+        "$word=New-Object -ComObject Word.Application;"
+        "$word.Visible=$false;"
+        "$word.DisplayAlerts=0;"
+        f"$doc=$word.Documents.Open('{escaped}');"
+        "if($doc.TablesOfContents.Count -gt 0){"
+        "$range=$doc.TablesOfContents.Item(1).Range;"
+        "$doc.TablesOfContents.Item(1).Delete();"
+        "$null=$doc.TablesOfContents.Add($range,$true,1,3,$false,'',$true,$true,'',$true,$true,$true)"
+        "};"
+        "$doc.Fields.Update() | Out-Null;"
+        "$doc.Save();"
+        "$doc.Close();"
+        "$word.Quit();"
+        "exit 0"
+        "} catch {"
+        "if($doc -ne $null){ try { $doc.Close([ref]0) } catch {} };"
+        "if($word -ne $null){ try { $word.Quit() } catch {} };"
+        "Write-Output $_.Exception.Message;"
+        "exit 1"
+        "}"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=90,
+            check=False,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
 def extract_docx_text_xml(docx_path: Path) -> str:
     with zipfile.ZipFile(docx_path, "r") as zf:
         all_xml = []
@@ -5980,7 +5877,11 @@ def parse_evidence_pool(path: Path) -> Tuple[List[Dict[str, object]], List[str]]
     if not path.exists():
         return [], [f"missing:{path.name}"]
 
-    lines = [x.rstrip("\n") for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    lines = [
+        x.rstrip("\n")
+        for x in path.read_text(encoding="utf-8").splitlines()
+        if x.strip() and (not x.lstrip().startswith("#"))
+    ]
     if not lines:
         return [], [f"empty:{path.name}"]
 
@@ -6026,7 +5927,11 @@ def parse_reference_list(path: Path) -> Tuple[List[Dict[str, object]], List[str]
     if not path.exists():
         return [], [f"missing:{path.name}"]
 
-    lines = [x.strip() for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    lines = [
+        x.strip()
+        for x in path.read_text(encoding="utf-8").splitlines()
+        if x.strip() and (not x.lstrip().startswith("#"))
+    ]
     if not lines:
         return [], [f"empty:{path.name}"]
 
@@ -6247,6 +6152,7 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
     total_chars = sum(chapter_chars.values()) + len(re.sub(r"\s+", "", summary_text))
     total_gap = max(0, 30000 - total_chars)
     summary_chars = len(re.sub(r"\s+", "", summary_text))
+    refresh_cmd = f'python scripts/run_pipeline.py --topic "{DISEASE_NAME}" --refresh-progress'
 
     chapter_to_specs: Dict[int, List[BlockSpec]] = {}
     for spec in specs:
@@ -6291,6 +6197,13 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
         "9) Prioritize segmentation, pathway differences, adherence mechanisms, policy constraints, forecast assumptions, and strategy actions in Chapters 5-7.",
         "10) Non-chapter-4 figure source lines must be specific. Do not use only 'public source??' style placeholders.",
         "11) Avoid empty management jargon. Each paragraph should carry a real medical or market anchor.",
+        "12) Keep each chapter summary near 450-650 chars. If a summary grows past 650, compress it before rewriting the full chapter.",
+        "",
+        "[Fast Repair Tactics]",
+        "- If a chapter is short by <=300 chars, add 1 anchored paragraph first instead of rewriting the whole chapter.",
+        "- If only one block is weak, patch that block locally and preserve the chapters that already pass.",
+        "- Prefer script-recognized anchors in new paragraphs: year/quarter, %, 万元, 72小时, 1周, 3个月, CR5, CAGR, 红旗征, or citation IDs like [3].",
+        f"- After each repair batch, refresh progress assets with: {refresh_cmd}",
         "",
         "[Suggested Order]",
         ("- Fix under-length chapters first: " + ", ".join(priority_chapters)) if priority_chapters else "- Chapter lengths already pass; focus on weak blocks and summary quality first.",
@@ -6323,6 +6236,7 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
             f"- Overwrite: {OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
             f"- Overwrite: {OUT_ROOT / 'summary.txt'}",
             "- Do not write any new artifact to the repo root.",
+            f"- Quick progress refresh while editing: {refresh_cmd}",
             f"- Re-run after rewriting: python scripts/run_pipeline.py --topic \"{DISEASE_NAME}\"",
         ]
     )
@@ -6340,6 +6254,7 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
     summary_target_floor = 1200
     draft_floor = max(31200, total_target + summary_target_floor)
     draft_ceiling = 33000
+    refresh_cmd = f'python scripts/run_pipeline.py --topic "{DISEASE_NAME}" --refresh-progress'
 
     lines = [
         "[Codex Writing Blueprint]",
@@ -6375,6 +6290,16 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
         "9) If evidence is weak, narrow the claim boundary instead of padding with generic language.",
         "10) If fig_2_3 is not ready, write fig23_codex_spec.json first before stage3-stage5.",
         "",
+        "[Anchor Cheat Sheet]",
+        "- Prefer at least one script-visible anchor in each paragraph: 2024 / 2025Q3 / 52.34% / 81292.0万元 / 72小时 / 1周 / 3个月 / CR5 / CAGR / 红旗征 / [3].",
+        "- If a paragraph is purely connective, add a concrete follow-up node, quantified fact, or citation before moving on.",
+        "",
+        "[Fast First-Draft Strategy]",
+        "- Overshoot every chapter floor by 150-300 chars in the first draft. Do not sit on the tolerance edge.",
+        "- Keep every 本章小结 near 450-650 chars; long summaries cause avoidable rewrites.",
+        "- Write 2-3 blocks, then refresh the progress assets before continuing.",
+        f"- Quick progress refresh command: {refresh_cmd}",
+        "",
         "[Chapter Targets]",
     ]
     for chapter in range(1, 8):
@@ -6392,10 +6317,11 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
             "",
             "[Suggested Workflow]",
             "1) Read the evidence pool, text manifest, figure manifest, and chapter-4 structured data before writing.",
-            "2) Write Chapters 1-3 first, then Chapter 4, then Chapters 5-7.",
+            "2) Write Chapters 1-3 first, refresh progress, then Chapter 4, refresh progress, then Chapters 5-7.",
             "3) Write the summary last so it reflects the final logic instead of repeating the table of contents.",
-            "4) Run stage3-stage5 after the body is complete.",
-            f"5) Command: python scripts/run_pipeline.py --topic \"{DISEASE_NAME}\"",
+            f"4) During drafting, use: {refresh_cmd}",
+            "5) Run stage3-stage5 only after the body is complete.",
+            f"6) Final command: python scripts/run_pipeline.py --topic \"{DISEASE_NAME}\"",
         ]
     )
     return "\n".join(lines)
@@ -6783,7 +6709,11 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     missing_h3_blocks: List[str] = metrics["missing_h3_blocks"]  # type: ignore[assignment]
 
     # Reference traceability checks.
-    refs_lines = [normalize_reference_line(x) for x in (OUT_ROOT / "refs.txt").read_text(encoding="utf-8").splitlines() if x.strip()]
+    refs_lines = [
+        normalize_reference_line(x)
+        for x in (OUT_ROOT / "refs.txt").read_text(encoding="utf-8").splitlines()
+        if x.strip() and (not x.lstrip().startswith("#"))
+    ]
     normalized_excel_name = normalize_disease_text(EXCEL_PATH.name)
     bad_ref_rows: List[str] = []
     for idx, line in enumerate(refs_lines, start=1):
@@ -7201,7 +7131,8 @@ def run_stage3_ch4_and_figures() -> None:
     except (FileNotFoundError, ValueError) as exc:
         raise RuntimeError(
             "Missing reusable body text. "
-            f"Write ch01~ch07.txt/summary.txt/refs.txt by following {OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME}; "
+            f"Write ch01~ch07.txt/summary.txt by following {OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME}; "
+            f"preserve Codex-authored evidence/refs when available; "
             f"if rewriting is needed, use {OUT_ROOT / 'codex_rewrite_prompt.txt'}; "
             f"write fig23 via {OUT_ROOT / FIG23_CODEX_PROMPT_NAME} -> {OUT_ROOT / FIG23_CODEX_SPEC_NAME}; "
             f"and for other semantic figures use {OUT_ROOT / FIGURE_SPECS_CODEX_PROMPT_NAME} -> {OUT_ROOT / 'figure_specs.json'}."
@@ -7225,6 +7156,7 @@ def run_stage4_assemble_docx() -> None:
     ensure_figure_source_footers(fig_rows)
     assemble_docx(specs, block_text, summary_text, refs_text, fig_rows)
     post_process_docx_xml(FINAL_DOCX)
+    refresh_docx_fields_with_word(FINAL_DOCX)
     print(f"阶段4完成：{FINAL_DOCX}")
 
 
@@ -7332,6 +7264,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--template", default="template.docx", help="Word模板路径")
     parser.add_argument("--out-base", default="autofile", help="输出根目录（默认autofile）")
     parser.add_argument("--lite-output", action="store_true", help="轻量输出：流程结束后清理中间产物，仅保留final docx与qa结果")
+    parser.add_argument("--refresh-progress", action="store_true", help="只刷新 Codex 写稿进度资产（codex_gap_panel/chapter_precheck/txt_stage_qa），不生成图表或docx")
     return parser.parse_args()
 
 
@@ -7445,8 +7378,23 @@ def run_stage5(disease: str, out_base: str | None = "autofile") -> None:
     run_stage5_qa()
 
 
+def run_refresh_progress(disease: str, out_base: str | None = "autofile") -> None:
+    configure_runtime(disease_name=disease, out_base=Path(out_base) if out_base else None)
+    specs = runtime_block_specs()
+    block_text, summary_text = load_existing_text_bundle_partial(specs)
+    report, passed = run_txt_stage_checks(specs, block_text, summary_text)
+    print(report)
+    print("")
+    print(f"进度刷新完成：{'通过' if passed else '未通过'}")
+    print(f"已更新：{OUT_ROOT / CODEX_GAP_PANEL_NAME}")
+    print(f"已更新：{OUT_ROOT / CHAPTER_PRECHECK_NAME}")
+    print(f"已更新：{OUT_ROOT / 'txt_stage_qa.txt'}")
+
+
 def main() -> None:
     args = parse_args()
+    if args.all_topics and args.refresh_progress:
+        raise ValueError("--refresh-progress 不支持与 --all-topics 同时使用。")
     if args.all_topics:
         run_batch(data_dir=args.data_dir, template=args.template, out_base=args.out_base, lite_output=args.lite_output)
         return
@@ -7456,6 +7404,9 @@ def main() -> None:
         from_readme=args.from_readme,
         readme_path=args.readme,
     )
+    if args.refresh_progress:
+        run_refresh_progress(disease=topic_name, out_base=args.out_base)
+        return
     run(topic=topic_name, xlsx=args.xlsx, template=args.template, out_base=args.out_base, lite_output=args.lite_output)
 
 
