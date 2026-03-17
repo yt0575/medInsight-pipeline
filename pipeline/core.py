@@ -2897,7 +2897,7 @@ def build_generic_evidence_and_refs() -> Tuple[str, str]:
         ("国家医保局2024年药品目录调整新闻发布会", "国家医疗保障局", "2024", "目录调整原则与临床价值导向", "https://www.nhsa.gov.cn/art/2024/11/28/art_52_14890.html"),
         ("国家统计数据发布平台（人口与社会）", "国家统计局", "2024", "人口结构与就医需求变化", "https://www.stats.gov.cn/"),
         ("中国卫生健康统计年鉴及国家统计数据库", "国家卫生健康委员会/国家统计局", "2024", "长期趋势对终端需求和专科服务供给的影响", "https://www.stats.gov.cn/"),
-        ("米内网终端数据口径说明与原始数据文件", "米内网/项目数据", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
+        ("米内网终端数据库", "米内网", "2025", "医院/药店/线上三端同口径比较基础", f"{EXCEL_PATH.name}"),
         ("国家药监局法规与政策文件索引", "国家药品监督管理局", "2024", "全生命周期合规要求与监管边界", "https://www.nmpa.gov.cn/xxgk/fgwj/"),
     ]
 
@@ -5496,7 +5496,7 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     set_main_title(ax, "fig_7_1", f"图表7-1：{DISEASE_NAME}市场规模预测（2026-2030）")
     ax.legend()
     save_figure(FIG_DIR / "fig_7_1.png", fig)
-    add_fig_meta("fig_7_1", f"图表7-1：{DISEASE_NAME}市场规模预测（2026-2030）", "折线图", "米内网+趋势测算", "预测模型", "annual_channel", "7.1", "市场预测", "数据来源：米内网与趋势测算")
+    add_fig_meta("fig_7_1", f"图表7-1：{DISEASE_NAME}市场规模预测（2026-2030）", "折线图", "米内网", "预测模型", "annual_channel", "7.1", "市场预测", "数据来源：米内网")
 
     fig, ax = plt.subplots(figsize=(7.8, 4.5))
     if is_cervical_profile():
@@ -5666,7 +5666,7 @@ def assemble_docx(specs: List[BlockSpec], block_text: Dict[str, str], summary: s
     h_ref = doc.add_paragraph(style="一级目录")
     set_para_text(h_ref, "参考文献")
     for line in refs_text.splitlines():
-        if line.strip():
+        if line.strip() and (not line.lstrip().startswith("#")):
             p = doc.add_paragraph(style="数据报告正文")
             set_para_text(p, normalize_reference_line(line))
             apply_reference_paragraph_format(p)
