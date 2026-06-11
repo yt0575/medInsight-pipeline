@@ -6,6 +6,13 @@
 python scripts/run_pipeline.py --topic "肠黏膜修复"
 ```
 
+## 模板选择
+
+```powershell
+python scripts/run_pipeline.py --list-templates
+python scripts/run_pipeline.py --topic "肠黏膜修复" --template-id disease_template_01
+```
+
 默认会读取：
 
 - `data/肠黏膜修复.xlsx`
@@ -39,12 +46,14 @@ python scripts/run_pipeline.py --all-topics
 - `--from-readme`：从 `README.md` 中的 `医学主题：` 配置行读取主题；同时兼容旧的 `疾病名：`
 - `--readme "README.md"`：指定读取配置的 README
 - `--xlsx "data/<医学主题>.xlsx"`：覆盖默认 Excel 路径
+- `--list-templates`：列出可用 `template_id`、模板路径、章节数与 market-data scope
+- `--template-id "disease_template_01"`：按模板注册表选择结构化模板
 - `--template "template.docx"`：覆盖模板路径
 - `--out-base "autofile"`：覆盖输出根目录
 - `--lite-output`：清理中间产物，仅保留最终 docx、QA 与日志
 - `--refresh-progress`：只刷新 `codex_gap_panel.txt`、`chapter_precheck.txt`、`txt_stage_qa.txt`，用于 Codex 写稿中途自检，不生成图表或 docx
 
-若某个 Excel 只包含 `医院品类/医院top`，脚本会自动把缺失的药店端/线上端季度值按 `0` 补齐，并将缺失渠道的 Top10/CR5 保持为空，同时在 `ch04_sheet_map.txt` 中标记。
+若某个 Excel 只包含 `医院品类/医院top`，脚本会自动把缺失的药店端/线上端季度值按 `0` 补齐，并将缺失渠道的 Top10/CR5 保持为空，同时在 `market_data_sheet_map.txt` 中标记。
 
 ## 自动准备行为
 
@@ -52,7 +61,7 @@ python scripts/run_pipeline.py --all-topics
 
 - `00_evidence.txt`
 - `refs.txt`
-- `ch04_codex_extract.json`
+- `market_data_codex_extract.json`（兼容保留 `ch04_codex_extract.json`）
 - `fig23_codex_spec_template.json`
 - `fig23_codex_prompt.txt`
 - `figure_specs_codex_template.json`
@@ -63,13 +72,13 @@ python scripts/run_pipeline.py --all-topics
 - `chapter_precheck.txt`
 - `codex_block_cards.txt`
 - `codex_block_cards/`
-- `ch04_narrative_brief.txt`
+- `market_data_narrative_brief.txt`（兼容保留 `ch04_narrative_brief.txt`）
 
 以下文件改为由当前 Codex 会话主导写入，不再由脚本自动代写：
 
 - `fig23_codex_spec.json`
 - `figure_specs.json`（按需）
-- `ch01.txt` ~ `ch07.txt`
+- `chNN.txt`（按 active template profile 的章节数生成）
 - `summary.txt`
 
 说明：

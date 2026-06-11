@@ -5,7 +5,7 @@
 本仓库已从“单病种报告”调整为“医学主题市场分析报告”流水线。
 
 - 输入主键：`医学主题`
-- 第4章数据：`data/<医学主题>.xlsx`
+- 模板 profile 指定的数据章 / 数据 block：`data/<医学主题>.xlsx`
 - 输出目录：`autofile/<医学主题>/`
 
 ## 主要模块
@@ -17,6 +17,8 @@
   - 轻量 CLI 入口，直接委托 `pipeline.core.main`
 - `pipeline/disease_profiles.json`
   - 保留既有主题画像和图表规则；仍可用于 profile 匹配与 `fig_2_3` 语义控制
+- `pipeline/template_profiles.json`
+  - 模板注册表；维护 `template_id`、模板路径、章节数、market-data scope、字数门槛与样式映射
 
 ## 当前真实流程
 
@@ -24,7 +26,7 @@
 flowchart LR
   A["CLI: --topic / --all-topics"] --> B["configure_runtime"]
   B --> C["Stage1: 证据池 + refs + Codex 前置资产"]
-  C --> D["Codex Prep: ch04 结构化抽取 + 叙事摘要 + gap/precheck"]
+  C --> D["Codex Prep: market-data 结构化抽取 + 叙事摘要 + gap/precheck"]
   D --> E["Codex 会话写正文 / summary / fig23 / 可选 figure_specs"]
   E --> F["Stage3: 图表 + manifest + txt gate"]
   F --> G["Stage4: 组装 final.docx"]
@@ -38,15 +40,15 @@ flowchart LR
 2. 若未显式传 `--xlsx`，默认定位到 `data/<医学主题>.xlsx`。
 3. `run()` 固定执行 3 段：
    - `run_stage1_evidence()`：生成 `00_evidence.txt`、`refs.txt` 的通用 scaffold 和 Codex 前置提示资产；若当前主题已有 Codex 修订版 evidence/refs，则优先保留。
-   - `ensure_codex_prep_assets_ready()`：准备第 4 章结构化数据和写作辅助文件。
+   - `ensure_codex_prep_assets_ready()`：准备模板 profile 指定的数据章结构化数据和写作辅助文件。
    - `run_assist_pipeline()`：串行执行 `stage3 -> stage4 -> stage5`。
-4. 第 4 章结构化数据来自 `ch04_codex_extract.json`：
+4. 数据章结构化数据来自 `market_data_codex_extract.json`（兼容保留 `ch04_codex_extract.json`）：
    - 若不存在，脚本会从 `data/<医学主题>.xlsx` 自动抽取；
    - 若工作簿只提供医院端 sheet，脚本会把缺失渠道按 `0` 补齐到 `quarterly_channel`，缺失渠道的 Top10/CR5 保持为空。
 5. `ensure_codex_prep_assets_ready()` 会生成或刷新以下辅助文件：
-   - `ch04_excel_profile.txt`
-   - `ch04_data_dictionary.txt`
-   - `ch04_narrative_brief.txt`
+   - `market_data_excel_profile.txt`
+   - `market_data_data_dictionary.txt`
+   - `market_data_narrative_brief.txt`
    - `codex_gap_panel.txt`
    - `chapter_precheck.txt`
 6. `write_codex_preflight_assets()` 会生成或刷新以下 Codex 写作/改写资产：
@@ -58,14 +60,14 @@ flowchart LR
    - `figure_specs_codex_prompt.txt`
    - `semantic_review_prompt.txt`
 7. 当前流程是 **Codex-first**：
-   - 脚本不再自动代写 `ch01~ch07.txt` 或 `summary.txt`
+   - 脚本不再自动代写 `chNN.txt` 或 `summary.txt`
    - 脚本也不再自动代写 `fig23_codex_spec.json`
    - 这些文件必须由当前 Codex 会话主导写入
 8. `stage3` 在出图前会先做 TXT 闸门：
    - 正文必须存在
    - `summary.txt` 必须存在
    - `fig23_codex_spec.json` 必须存在且可解析
-   - 之后才会生成图表、`manifest_text.csv`、`manifest_fig.csv` 和 `ch04_agg_tables.xlsx`
+   - 之后才会生成图表、`manifest_text.csv`、`manifest_fig.csv` 和 `market_data_agg_tables.xlsx`
 9. `stage4` 负责把正文、summary、refs、图表和模板装配到最终 `final.docx`。
 10. `stage5` 负责最终 QA，并输出 `qa_check.txt`。
 
@@ -77,8 +79,8 @@ flowchart LR
 - `chapter_precheck.txt`
   - 章节级轻量预检
   - 提前暴露 `PASS / WARN / FAIL`、引用、锚点覆盖、医学密度等问题
-- `ch04_narrative_brief.txt`
-  - 第 4 章叙事摘要
+- `market_data_narrative_brief.txt`
+  - 数据章叙事摘要
   - 把最新季度、YoY、长期趋势、Top 品种、CR5 等数字整理成可直接写作的 bullet brief
 
 ## 字数闸门
@@ -99,9 +101,9 @@ flowchart LR
 2. 先看：
    - `codex_gap_panel.txt`
    - `chapter_precheck.txt`
-   - `ch04_narrative_brief.txt`
+   - `market_data_narrative_brief.txt`
 3. 由当前 Codex 会话写：
-   - `ch01.txt` ~ `ch07.txt`
+   - `chNN.txt`
    - `summary.txt`
    - `fig23_codex_spec.json`
    - 如有必要，再写 `figure_specs.json`
@@ -112,7 +114,7 @@ flowchart LR
 - `run_batch()` 会遍历 `data/*.xlsx`
 - 但由于当前流程已改成 Codex-first，**批处理不再等于脚本自动代写正文**
 - 如果某个主题缺少：
-  - `ch01~ch07.txt`
+  - `chNN.txt`
   - `summary.txt`
   - `fig23_codex_spec.json`
   那么该主题会在 `stage3` 前置闸门处失败

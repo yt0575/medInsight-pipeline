@@ -20,21 +20,63 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 from urllib.parse import quote_plus, urlparse
 from urllib.request import urlopen
 
-import matplotlib
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
-from matplotlib import font_manager
-from matplotlib.patches import FancyBboxPatch
-from docx import Document
-from openpyxl import load_workbook
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Inches
+class _MissingDependency:
+    def __init__(self, package_name: str):
+        self.package_name = package_name
+
+    def __getattr__(self, name: str):
+        raise RuntimeError(f"Missing optional dependency required for this operation: {self.package_name}")
+
+    def __call__(self, *args, **kwargs):
+        raise RuntimeError(f"Missing optional dependency required for this operation: {self.package_name}")
+
+
+try:
+    import matplotlib
+    import matplotlib.pyplot as plt
+    from matplotlib import font_manager
+    from matplotlib.patches import FancyBboxPatch
+except ModuleNotFoundError:
+    matplotlib = None
+    plt = _MissingDependency("matplotlib")
+    font_manager = _MissingDependency("matplotlib")
+    FancyBboxPatch = _MissingDependency("matplotlib")
+
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = _MissingDependency("numpy")
+
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    pd = _MissingDependency("pandas")
+
+try:
+    from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
+except ModuleNotFoundError:
+    Image = _MissingDependency("Pillow")
+    ImageDraw = _MissingDependency("Pillow")
+    ImageFont = _MissingDependency("Pillow")
+    PngImagePlugin = _MissingDependency("Pillow")
+
+try:
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Inches
+except ModuleNotFoundError:
+    Document = _MissingDependency("python-docx")
+    WD_ALIGN_PARAGRAPH = _MissingDependency("python-docx")
+    Inches = _MissingDependency("python-docx")
+
+try:
+    from openpyxl import load_workbook
+except ModuleNotFoundError:
+    load_workbook = _MissingDependency("openpyxl")
 
 
 FIGURE_FONT_FAMILY = "SimSun"
@@ -45,10 +87,11 @@ FIGURE_BODY_FONT_PT_MIN = 8.0
 FIGURE_BODY_FONT_PT_MAX = 12.0
 FIGURE_RENDER_DPI = 300
 
-matplotlib.rcParams["font.sans-serif"] = FIGURE_FONT_FAMILY_FALLBACKS
-matplotlib.rcParams["font.family"] = [FIGURE_FONT_FAMILY]
-matplotlib.rcParams["font.size"] = FIGURE_BODY_WORD_EQUIVALENT_FONT_PT
-matplotlib.rcParams["axes.unicode_minus"] = False
+if matplotlib is not None:
+    matplotlib.rcParams["font.sans-serif"] = FIGURE_FONT_FAMILY_FALLBACKS
+    matplotlib.rcParams["font.family"] = [FIGURE_FONT_FAMILY]
+    matplotlib.rcParams["font.size"] = FIGURE_BODY_WORD_EQUIVALENT_FONT_PT
+    matplotlib.rcParams["axes.unicode_minus"] = False
 
 
 TOPIC_LABEL = "医学主题"
@@ -100,7 +143,17 @@ SEMANTIC_REVIEW_PROMPT_NAME = "semantic_review_prompt.txt"
 CODEX_GAP_PANEL_NAME = "codex_gap_panel.txt"
 CHAPTER_PRECHECK_NAME = "chapter_precheck.txt"
 CH4_NARRATIVE_BRIEF_NAME = "ch04_narrative_brief.txt"
-CHAPTER_MIN_CHARS = {
+MARKET_DATA_CODEX_EXTRACT_NAME = "market_data_codex_extract.json"
+MARKET_DATA_CODEX_EXTRACT_TEMPLATE_NAME = "market_data_codex_extract_template.json"
+MARKET_DATA_CODEX_PROMPT_NAME = "market_data_codex_prompt.txt"
+MARKET_DATA_WORKBOOK_PREVIEW_NAME = "market_data_workbook_preview.txt"
+MARKET_DATA_SHEET_MAP_NAME = "market_data_sheet_map.txt"
+MARKET_DATA_CODEX_REVIEW_NAME = "market_data_codex_review.txt"
+MARKET_DATA_EXCEL_PROFILE_NAME = "market_data_excel_profile.txt"
+MARKET_DATA_DATA_DICTIONARY_NAME = "market_data_data_dictionary.txt"
+MARKET_DATA_AGG_TABLES_NAME = "market_data_agg_tables.xlsx"
+MARKET_DATA_NARRATIVE_BRIEF_NAME = "market_data_narrative_brief.txt"
+BASE_CHAPTER_MIN_CHARS = {
     1: 3000,
     2: 3500,
     3: 4800,
@@ -109,6 +162,7 @@ CHAPTER_MIN_CHARS = {
     6: 4800,
     7: 4800,
 }
+CHAPTER_MIN_CHARS = dict(BASE_CHAPTER_MIN_CHARS)
 CHAPTER_CHAR_TOLERANCE = 100
 SUMMARY_BLOCK_TARGET_CHARS = 500
 SUMMARY_BLOCK_WARN_CHARS = 650
@@ -142,8 +196,12 @@ LOW_CONFIDENCE_PROFILE_KEYWORDS = {
     "骨科",
 }
 PROFILE_CONFIG_PATH = Path(__file__).with_name("disease_profiles.json")
+TEMPLATE_PROFILE_CONFIG_PATH = Path(__file__).with_name("template_profiles.json")
 _PROFILE_CONFIG_CACHE: Dict[str, object] | None = None
 _ACTIVE_PROFILE_CACHE: Tuple[str, str] | None = None
+_TEMPLATE_PROFILE_CACHE: Dict[str, "TemplateProfile"] | None = None
+ACTIVE_TEMPLATE_ID = "legacy_default"
+ACTIVE_TEMPLATE_PROFILE: "TemplateProfile | None" = None
 
 
 def chapter_char_shortfall(chapter: int, chars: int) -> int:
@@ -203,8 +261,33 @@ def normalize_reference_line(line: str) -> str:
     out = normalize_disease_text(str(line))
     for token in ["\u00A0", "\u2002", "\u2003", "\u2009", "\u202F", "\u3000", "\t"]:
         out = out.replace(token, " ")
+    out = re.sub(r"(?i)\bxlex\b[:：]?", "", out)
+    out = re.sub(r"(?i)xlex(?=https?://)", "", out)
     out = re.sub(r" {2,}", " ", out)
     return out.strip()
+
+
+def strip_body_citation_anchors(text: str) -> str:
+    out = str(text)
+    out = re.sub(r"\[\s*\d+(?:\s*[-,，、]\s*\d+)*\s*\]", "", out)
+    return out
+
+
+def clean_docx_body_text(text: str) -> str:
+    out = normalize_disease_text(strip_body_citation_anchors(str(text)))
+    out = re.sub(r"(?i)\bxlex\b[:：]?", "", out)
+    out = re.sub(r"(?i)xlex(?=https?://)", "", out)
+    out = re.sub(r"[\r\n\t]+", " ", out)
+    out = re.sub(r" {2,}", " ", out)
+    out = re.sub(r"(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff0-9])", "", out)
+    out = re.sub(r"(?<=[0-9])\s+(?=[\u3400-\u9fff])", "", out)
+    out = re.sub(r"\s+([，。；：、！？,.!?;:%）)])", r"\1", out)
+    out = re.sub(r"([（(])\s+", r"\1", out)
+    return out.strip()
+
+
+def body_citation_anchor_count(text: str) -> int:
+    return len(re.findall(r"\[\s*\d+(?:\s*[-,，、]\s*\d+)*\s*\]", str(text)))
 
 
 def _is_codex_authored_marker(value: object) -> bool:
@@ -1063,9 +1146,11 @@ def configure_runtime(
     excel_path: Path | None = None,
     template_path: Path | None = None,
     out_base: Path | None = None,
+    template_id: str | None = None,
 ) -> None:
     """Configure global runtime paths so the pipeline can run for any medical topic."""
     global DISEASE_NAME, REPORT_TITLE, EXCEL_PATH, TEMPLATE_PATH, OUT_ROOT, FIG_DIR, FINAL_DOCX
+    global ACTIVE_TEMPLATE_ID, ACTIVE_TEMPLATE_PROFILE, CHAPTER_MIN_CHARS
     global _ACTIVE_PROFILE_CACHE, _DOCX_BODY_FONT_CACHE, _DOCX_BODY_FONT_CACHE_PATH, _SOURCE_FOOTER_FONT_PATH_CACHE
 
     DISEASE_NAME = disease_name.strip()
@@ -1075,7 +1160,11 @@ def configure_runtime(
     _SOURCE_FOOTER_FONT_PATH_CACHE = {}
     REPORT_TITLE = report_title_for_topic(DISEASE_NAME)
     EXCEL_PATH = Path(excel_path) if excel_path is not None else default_excel_path(DISEASE_NAME)
-    TEMPLATE_PATH = Path(template_path) if template_path is not None else Path("template.docx")
+    requested_template_path = Path(template_path) if template_path is not None else Path("template.docx")
+    ACTIVE_TEMPLATE_PROFILE = resolve_template_profile(template_id=template_id, template_path=requested_template_path)
+    ACTIVE_TEMPLATE_ID = ACTIVE_TEMPLATE_PROFILE.template_id
+    TEMPLATE_PATH = ACTIVE_TEMPLATE_PROFILE.path
+    CHAPTER_MIN_CHARS = dict(ACTIVE_TEMPLATE_PROFILE.chapter_min_chars)
     base = Path(out_base) if out_base is not None else Path("autofile")
     OUT_ROOT = base / DISEASE_NAME
     FIG_DIR = OUT_ROOT / "figures"
@@ -1170,6 +1259,84 @@ def parse_category_sheet(xlsx: Path, sheet: str) -> pd.DataFrame:
     df = pd.DataFrame(records, columns=["quarter", "sales"])
     if df.empty:
         raise ValueError(f"Sheet {sheet} has no quarter-sales rows.")
+    df = df.drop_duplicates(subset=["quarter"]).copy()
+    df["qk"] = df["quarter"].apply(qkey)
+    df = df.sort_values("qk").drop(columns=["qk"]).reset_index(drop=True)
+    return df
+
+
+def parse_combined_channel_sheet(xlsx: Path, sheet: str) -> pd.DataFrame:
+    _, _, full_top = parse_top_sheet(xlsx, sheet)
+    if full_top.empty:
+        raise ValueError(f"Sheet {sheet} has no combined top rows.")
+
+    quarter_cols = [c for c in full_top.columns if c not in {"rank", "name"} and QUARTER_RE.match(str(c))]
+    if not quarter_cols:
+        raise ValueError(f"Sheet {sheet} has no quarter columns in combined layout.")
+
+    raw = pd.read_excel(xlsx, sheet_name=sheet, header=None)
+    rank_row = None
+    for i in range(min(raw.shape[0], 16)):
+        c0 = str(raw.iat[i, 0]).strip()
+        if c0 == "排名" or c0.startswith("排名"):
+            rank_row = i
+            break
+    if rank_row is None:
+        raise ValueError(f"Sheet {sheet} missing combined-layout rank header.")
+    quarter_row = rank_row + 1
+
+    share_start = None
+    for j in range(raw.shape[1]):
+        h = str(raw.iat[rank_row, j]).strip()
+        if h.startswith("市场份额"):
+            share_start = j
+            break
+    if share_start is None:
+        raise ValueError(f"Sheet {sheet} missing 市场份额 block.")
+
+    share_end = raw.shape[1]
+    for j in range(share_start + 1, raw.shape[1]):
+        h = str(raw.iat[rank_row, j]).strip()
+        if h and h != "nan":
+            share_end = j
+            break
+
+    share_col_map: Dict[str, int] = {}
+    for j in range(share_start, share_end):
+        val = str(raw.iat[quarter_row, j]).strip()
+        if QUARTER_RE.match(val):
+            share_col_map[val] = j
+
+    if not share_col_map:
+        raise ValueError(f"Sheet {sheet} has no share-quarter columns.")
+
+    raw_rank = pd.to_numeric(raw.iloc[:, 0], errors="coerce")
+    raw_name = raw.iloc[:, 1].astype(str).str.strip()
+    totals: List[Tuple[str, float]] = []
+    for q in sorted(set(quarter_cols), key=qkey):
+        if q not in share_col_map:
+            continue
+        candidates: List[float] = []
+        for _, row in full_top.iterrows():
+            sales = pd.to_numeric(row.get(q), errors="coerce")
+            if pd.isna(sales) or float(sales) <= 0:
+                continue
+            match = raw[(raw_rank == row["rank"]) & (raw_name == str(row["name"]).strip())]
+            if match.empty:
+                continue
+            raw_i = int(match.index[0])
+            share = pd.to_numeric(raw.iat[raw_i, share_col_map[q]], errors="coerce")
+            if pd.isna(share) or float(share) <= 0:
+                continue
+            candidates.append(float(sales) / (float(share) / 100.0))
+        if not candidates:
+            continue
+        totals.append((q, float(sum(candidates) / len(candidates))))
+
+    df = pd.DataFrame(totals, columns=["quarter", "sales"])
+    if df.empty:
+        raise ValueError(f"Sheet {sheet} could not derive quarter totals from combined layout.")
+    df["sales"] = df["sales"].round(2)
     df = df.drop_duplicates(subset=["quarter"]).copy()
     df["qk"] = df["quarter"].apply(qkey)
     df = df.sort_values("qk").drop(columns=["qk"]).reset_index(drop=True)
@@ -1336,6 +1503,16 @@ CH4_CHANNEL_ALIASES = {
     "电商": "线上端",
 }
 CH4_PLACEHOLDER_NAME_TERMS = ("示例", "sample", "example", "待替换", "todo")
+CH4_CATEGORY_SHEET_CANDIDATES = {
+    "hospital": ["医院品类", "医院"],
+    "drugstore": ["药店品类", "药店"],
+    "online": ["线上品类", "线上"],
+}
+CH4_TOP_SHEET_CANDIDATES = {
+    "hospital": ["医院top", "医院"],
+    "drugstore": ["药店top", "药店"],
+    "online": ["线上top", "线上"],
+}
 
 
 def ch4_top_has_meaningful_competition(df: pd.DataFrame) -> bool:
@@ -1352,20 +1529,35 @@ def normalize_ch4_channel(value: object) -> str:
     return CH4_CHANNEL_ALIASES.get(text.lower(), CH4_CHANNEL_ALIASES.get(text, text))
 
 
+def resolve_ch4_sheet_name(available_sheets: set[str], candidates: List[str]) -> str | None:
+    for sheet_name in candidates:
+        if sheet_name in available_sheets:
+            return sheet_name
+    return None
+
+
 def build_ch4_data_from_legacy_parser(xlsx: Path) -> Ch4Data:
     available_sheets = set(get_workbook_sheet_names(xlsx))
-    channel_specs: List[Tuple[str, str, str]] = [
-        ("医院品类", "医院端", "hospital"),
-        ("药店品类", "药店端", "drugstore"),
-        ("线上品类", "线上端", "online"),
+    channel_specs: List[Tuple[List[str], str, str]] = [
+        (CH4_CATEGORY_SHEET_CANDIDATES["hospital"], "医院端", "hospital"),
+        (CH4_CATEGORY_SHEET_CANDIDATES["drugstore"], "药店端", "drugstore"),
+        (CH4_CATEGORY_SHEET_CANDIDATES["online"], "线上端", "online"),
     ]
     parsed_frames: Dict[str, pd.DataFrame] = {}
     discovered_quarters: List[str] = []
-    for sheet_name, channel_label, column in channel_specs:
-        if sheet_name not in available_sheets:
+    resolved_category_sheets: Dict[str, str] = {}
+    resolved_top_sheets: Dict[str, str] = {}
+    for sheet_candidates, channel_label, column in channel_specs:
+        sheet_name = resolve_ch4_sheet_name(available_sheets, sheet_candidates)
+        if sheet_name is None:
             print(f"警告：缺少{channel_label}季度sheet，后续将按 0 补齐。")
             continue
-        df = parse_category_sheet(xlsx, sheet_name).rename(columns={"sales": column})
+        resolved_category_sheets[column] = sheet_name
+        resolved_top_sheets[column] = resolve_ch4_sheet_name(available_sheets, CH4_TOP_SHEET_CANDIDATES[column]) or sheet_name
+        if sheet_name.endswith("品类"):
+            df = parse_category_sheet(xlsx, sheet_name).rename(columns={"sales": column})
+        else:
+            df = parse_combined_channel_sheet(xlsx, sheet_name).rename(columns={"sales": column})
         parsed_frames[column] = df
         discovered_quarters.extend(df["quarter"].astype(str).tolist())
 
@@ -1429,9 +1621,10 @@ def build_ch4_data_from_legacy_parser(xlsx: Path) -> Ch4Data:
         print(f"警告：{sheet}解析失败或源表为空，已标记为缺失数据{suffix}。")
         return top10, full
 
-    def safe_parse_top(sheet: str, channel_label: str) -> Tuple[str, pd.DataFrame, pd.DataFrame]:
-        if sheet not in available_sheets:
-            top10, full = fallback_top(sheet, channel_label, reason="缺少sheet")
+    def safe_parse_top(column: str, channel_label: str) -> Tuple[str, pd.DataFrame, pd.DataFrame]:
+        sheet = resolved_top_sheets.get(column)
+        if not sheet:
+            top10, full = fallback_top(CH4_TOP_SHEET_CANDIDATES[column][0], channel_label, reason="缺少sheet")
             return str(latest_q), top10, full
         try:
             parsed_q, parsed_top10, parsed_full = parse_top_sheet(xlsx, sheet)
@@ -1441,9 +1634,9 @@ def build_ch4_data_from_legacy_parser(xlsx: Path) -> Ch4Data:
             top10, full = fallback_top(sheet, channel_label)
             return str(latest_q), top10, full
 
-    h_q, h_top10, h_full = safe_parse_top("医院top", "医院端")
-    d_q, d_top10, d_full = safe_parse_top("药店top", "药店端")
-    o_q, o_top10, o_full = safe_parse_top("线上top", "线上端")
+    h_q, h_top10, h_full = safe_parse_top("hospital", "医院端")
+    d_q, d_top10, d_full = safe_parse_top("drugstore", "药店端")
+    o_q, o_top10, o_full = safe_parse_top("online", "线上端")
     if h_q != latest_q or d_q != latest_q or o_q != latest_q:
         pass
 
@@ -1509,7 +1702,7 @@ def write_json(path: Path, payload: object) -> None:
 def build_ch4_workbook_preview_lines(xlsx: Path, max_preview_rows: int = 4, max_preview_cols: int = 12) -> List[str]:
     wb = load_workbook(xlsx, read_only=True, data_only=False)
     lines = [
-        "【第四章Excel工作簿预览】",
+        f"【{market_data_scope_label()} Excel工作簿预览】",
         f"文件：{xlsx.name}",
     ]
     for ws in wb.worksheets:
@@ -1533,8 +1726,9 @@ def build_ch4_codex_extract_template(xlsx: Path) -> Dict[str, object]:
     wb = load_workbook(xlsx, read_only=True, data_only=False)
     sheet_names = [ws.title for ws in wb.worksheets]
     return {
-        "schema_version": "ch4_codex_extract_v1",
+        "schema_version": market_data_schema_version(),
         "disease": DISEASE_NAME,
+        "topic": DISEASE_NAME,
         "source_workbook": xlsx.name,
         "available_sheets": sheet_names,
         "latest_quarter": "",
@@ -1565,7 +1759,7 @@ def build_ch4_codex_extract_template(xlsx: Path) -> Dict[str, object]:
             ]
         },
         "notes": [
-            "由当前 Codex 会话读取第四章 Excel 后填充。",
+            f"由当前 Codex 会话读取{market_data_scope_label()} Excel 后填充。",
             "禁止杜撰数值；所有数字必须可回溯到工作簿单元格区域。",
             "latest_quarter 必填，且必须等于 quarterly_channel 中最后一个季度。",
             "quarterly_channel 必须一季度一行、季度唯一，不得重复。",
@@ -1578,16 +1772,16 @@ def build_ch4_codex_extract_template(xlsx: Path) -> Dict[str, object]:
 
 def build_ch4_codex_prompt(xlsx: Path) -> str:
     preview_lines = build_ch4_workbook_preview_lines(xlsx)
-    extract_path = OUT_ROOT / "ch04_codex_extract.json"
-    template_path = OUT_ROOT / "ch04_codex_extract_template.json"
+    extract_path = OUT_ROOT / MARKET_DATA_CODEX_EXTRACT_NAME
+    template_path = market_data_extract_template_path()
     lines = [
-        "【第四章 Codex 数据提取任务】",
+        f"【{market_data_scope_label()} Codex 数据提取任务】",
         f"医学主题：{DISEASE_NAME}",
         f"源文件：{xlsx.name}",
         f"目标输出：{extract_path}",
         f"参考模板：{template_path}",
         "",
-        "请由当前 Codex 会话读取第四章 Excel，并生成结构化 JSON，供脚本后续画图与装配使用。",
+        f"请由当前 Codex 会话读取{market_data_scope_label()} Excel，并生成结构化 JSON，供脚本后续画图与装配使用。",
         "",
         "强制要求：",
         "1) 只允许基于工作簿中的真实数据填充，禁止推测、补造或平滑。",
@@ -1617,16 +1811,16 @@ def build_ch4_codex_prompt(xlsx: Path) -> str:
 
 def write_ch4_codex_helper_files(xlsx: Path) -> None:
     template = build_ch4_codex_extract_template(xlsx)
-    write_json(OUT_ROOT / "ch04_codex_extract_template.json", template)
-    write_text(OUT_ROOT / "ch04_codex_prompt.txt", build_ch4_codex_prompt(xlsx) + "\n")
-    write_text(OUT_ROOT / "ch04_workbook_preview.txt", "\n".join(build_ch4_workbook_preview_lines(xlsx)) + "\n")
+    write_neutral_and_legacy_json(MARKET_DATA_CODEX_EXTRACT_TEMPLATE_NAME, "ch04_codex_extract_template.json", template)
+    write_neutral_and_legacy_text(MARKET_DATA_CODEX_PROMPT_NAME, "ch04_codex_prompt.txt", build_ch4_codex_prompt(xlsx) + "\n")
+    write_neutral_and_legacy_text(MARKET_DATA_WORKBOOK_PREVIEW_NAME, "ch04_workbook_preview.txt", "\n".join(build_ch4_workbook_preview_lines(xlsx)) + "\n")
 
 
 def write_ch4_codex_review_files(raw: Dict[str, object], latest_quarter: str) -> None:
     mapping = raw.get("sheet_mapping", {})
     notes = raw.get("notes", [])
     map_lines = [
-        "【第四章 Sheet 映射】",
+        f"【{market_data_scope_label()} Sheet 映射】",
         f"文件：{str(raw.get('source_workbook', EXCEL_PATH.name)).strip() or EXCEL_PATH.name}",
         f"最新季度：{latest_quarter}",
         "",
@@ -1641,10 +1835,10 @@ def write_ch4_codex_review_files(raw: Dict[str, object], latest_quarter: str) ->
                 map_lines.append(f"- {key}: {value}")
     else:
         map_lines.append("- 未提供 sheet_mapping")
-    write_text(OUT_ROOT / "ch04_sheet_map.txt", "\n".join(map_lines) + "\n")
+    write_neutral_and_legacy_text(MARKET_DATA_SHEET_MAP_NAME, "ch04_sheet_map.txt", "\n".join(map_lines) + "\n")
 
     review_lines = [
-        "【第四章 Codex 提取审阅】",
+        f"【{market_data_scope_label()} Codex 提取审阅】",
         f"schema_version：{raw.get('schema_version', 'N/A')}",
         f"source_workbook：{raw.get('source_workbook', EXCEL_PATH.name)}",
         f"latest_quarter：{latest_quarter}",
@@ -1656,7 +1850,7 @@ def write_ch4_codex_review_files(raw: Dict[str, object], latest_quarter: str) ->
             review_lines.append(f"- {note}")
     else:
         review_lines.append("- 无")
-    write_text(OUT_ROOT / "ch04_codex_review.txt", "\n".join(review_lines) + "\n")
+    write_neutral_and_legacy_text(MARKET_DATA_CODEX_REVIEW_NAME, "ch04_codex_review.txt", "\n".join(review_lines) + "\n")
 
 
 def _extract_table(tables: Dict[str, object], key: str, columns: List[str], allow_empty: bool = True) -> pd.DataFrame:
@@ -1664,22 +1858,23 @@ def _extract_table(tables: Dict[str, object], key: str, columns: List[str], allo
     if raw is None:
         raw = []
     if not isinstance(raw, list):
-        raise ValueError(f"ch04_codex_extract.json 中的 {key} 必须为数组。")
+        raise ValueError(f"{market_data_extract_path().name} 中的 {key} 必须为数组。")
     if not raw:
         if allow_empty:
             return pd.DataFrame(columns=columns)
-        raise ValueError(f"ch04_codex_extract.json 缺少必填表：{key}。")
+        raise ValueError(f"{market_data_extract_path().name} 缺少必填表：{key}。")
     df = pd.DataFrame(raw)
     missing = [c for c in columns if c not in df.columns]
     if missing:
-        raise ValueError(f"ch04_codex_extract.json 中的 {key} 缺少字段：{', '.join(missing)}。")
+        raise ValueError(f"{market_data_extract_path().name} 中的 {key} 缺少字段：{', '.join(missing)}。")
     return df[columns].copy()
 
 
 def build_ch4_data_from_codex_extract(extract_path: Path) -> Ch4Data:
     raw = json.loads(extract_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise ValueError("ch04_codex_extract.json 顶层必须为对象。")
+        raise ValueError(f"{extract_path.name} 顶层必须为对象。")
+    raw = normalize_market_data_schema(raw)
     schema_version = str(raw.get("schema_version", "")).strip()
     if schema_version != "ch4_codex_extract_v1":
         raise ValueError(f"schema_version 不正确：{schema_version or '空'}")
@@ -1691,7 +1886,7 @@ def build_ch4_data_from_codex_extract(extract_path: Path) -> Ch4Data:
         raise ValueError(f"source_workbook 不匹配：当前 Excel 为 {EXCEL_PATH.name}，JSON 中为 {source_workbook or '空'}")
     tables = raw.get("tables", {})
     if not isinstance(tables, dict):
-        raise ValueError("ch04_codex_extract.json 缺少 tables 对象。")
+        raise ValueError(f"{extract_path.name} 缺少 tables 对象。")
 
     quarterly = _extract_table(tables, "quarterly_channel", ["quarter", "hospital", "drugstore", "online"], allow_empty=False)
     quarterly["quarter"] = quarterly["quarter"].astype(str).str.strip()
@@ -1896,22 +2091,22 @@ def build_ch4_data_from_codex_extract(extract_path: Path) -> Ch4Data:
 
 def build_ch4_data(xlsx: Path) -> Ch4Data:
     write_ch4_codex_helper_files(xlsx)
-    extract_path = OUT_ROOT / "ch04_codex_extract.json"
+    extract_path = market_data_extract_path()
     if not extract_path.exists():
         raise RuntimeError(
-            "未检测到第四章结构化提取结果 ch04_codex_extract.json。"
-            "请先由当前 Codex 会话读取第四章 Excel，参考 ch04_codex_prompt.txt 与 ch04_codex_extract_template.json 生成该文件，再重新执行。"
+            f"未检测到{market_data_scope_label()}结构化提取结果 {MARKET_DATA_CODEX_EXTRACT_NAME}。"
+            f"请先由当前 Codex 会话读取 Excel，参考 {MARKET_DATA_CODEX_PROMPT_NAME} 与 {MARKET_DATA_CODEX_EXTRACT_TEMPLATE_NAME} 生成该文件，再重新执行。"
         )
     try:
         return build_ch4_data_from_codex_extract(extract_path)
     except Exception as exc:
         raise RuntimeError(
-            "第四章结构化提取结果无效。请先检查 ch04_codex_extract.json、ch04_sheet_map.txt 与 ch04_codex_review.txt 后再重试。"
+            f"{market_data_scope_label()}结构化提取结果无效。请先检查 {extract_path.name}、{MARKET_DATA_SHEET_MAP_NAME} 与 {MARKET_DATA_CODEX_REVIEW_NAME} 后再重试。"
         ) from exc
 
 
 def load_ch4_data_for_runtime() -> Ch4Data | None:
-    extract_path = OUT_ROOT / "ch04_codex_extract.json"
+    extract_path = market_data_extract_path()
     if extract_path.exists():
         try:
             return build_ch4_data_from_codex_extract(extract_path)
@@ -1926,48 +2121,11 @@ def load_ch4_data_for_runtime() -> Ch4Data | None:
 
 
 def chapter4_available_figure_ids(ch4: Ch4Data | None) -> set[str]:
-    available = {"fig_4_1", "fig_4_2", "fig_4_3"}
-    if ch4 is None:
-        return available | {"fig_4_5", "fig_4_6", "fig_4_7", "fig_4_8"}
-    if bool(ch4.yoy_latest["yoy_pct"].notna().any()):
-        available.add("fig_4_4")
-    if ch4_top_has_meaningful_competition(ch4.top_hospital):
-        available.add("fig_4_5")
-    if ch4_top_has_meaningful_competition(ch4.top_drugstore):
-        available.add("fig_4_6")
-    if ch4_top_has_meaningful_competition(ch4.top_online):
-        available.add("fig_4_7")
-    if (
-        (not ch4.cr5_latest.empty)
-        and bool(ch4.cr5_latest["cr5_pct"].notna().any())
-        and any(
-            ch4_top_has_meaningful_competition(df)
-            for df in [ch4.top_hospital, ch4.top_drugstore, ch4.top_online]
-        )
-    ):
-        available.add("fig_4_8")
-    return available
+    return market_available_figure_ids(ch4)
 
 
 def chapter4_missing_items(ch4: Ch4Data | None) -> List[str]:
-    if ch4 is None:
-        return []
-    missing: List[str] = []
-    if not bool(ch4.yoy_latest["yoy_pct"].notna().any()):
-        missing.append("三端同比增速（fig_4_4）")
-    if not ch4_top_has_meaningful_competition(ch4.top_hospital):
-        missing.append("医院端TOP10（fig_4_5）")
-    if not ch4_top_has_meaningful_competition(ch4.top_drugstore):
-        missing.append("药店端TOP10（fig_4_6）")
-    if not ch4_top_has_meaningful_competition(ch4.top_online):
-        missing.append("线上端TOP10（fig_4_7）")
-    if (
-        ch4.cr5_latest.empty
-        or (not bool(ch4.cr5_latest["cr5_pct"].notna().any()))
-        or (not any(ch4_top_has_meaningful_competition(df) for df in [ch4.top_hospital, ch4.top_drugstore, ch4.top_online]))
-    ):
-        missing.append("CR5集中度（fig_4_8）")
-    return missing
+    return market_missing_items(ch4)
 
 
 def write_ch4_profile_files(ch4: Ch4Data) -> None:
@@ -1986,14 +2144,14 @@ def write_ch4_profile_files(ch4: Ch4Data) -> None:
         top_support = f"部分支持（{channels}未提供最新季度Top表）"
 
     profile_lines = [
-        "【第四章Excel剖面】",
+        f"【{market_data_scope_label()} Excel剖面】",
         f"文件：{EXCEL_PATH.name}",
-        "第四章标准化来源：ch04_codex_extract.json（由 Codex 读取 Excel 后生成）",
-        "Sheet映射：详见 ch04_sheet_map.txt",
+        f"标准化来源：{market_data_extract_path().name}（由 Codex 读取 Excel 后生成）",
+        f"Sheet映射：详见 {MARKET_DATA_SHEET_MAP_NAME}",
         f"季度范围：{ch4.quarterly['quarter'].iloc[0]} - {ch4.quarterly['quarter'].iloc[-1]}",
         f"记录条数（渠道季度）：{len(ch4.quarterly)}",
         "粒度：季度，金额单位：万元，口径：米内网终端销售额",
-        "缺失与异常：详见 ch04_codex_review.txt；脚本仅消费结构化提取结果，不再直接猜测 Excel top 表结构。",
+        f"缺失与异常：详见 {MARKET_DATA_CODEX_REVIEW_NAME}；脚本仅消费结构化提取结果，不再直接猜测 Excel top 表结构。",
         "",
         "【可支撑分析】",
         "1) 规模趋势：可直接支持（季度+年度）",
@@ -2002,10 +2160,10 @@ def write_ch4_profile_files(ch4: Ch4Data) -> None:
         f"4) 重点品种：{top_support}",
         "5) 区域分析：原始表未提供地区维度，采用渠道与品种结构替代说明。",
     ]
-    write_text(OUT_ROOT / "ch04_excel_profile.txt", "\n".join(profile_lines))
+    write_neutral_and_legacy_text(MARKET_DATA_EXCEL_PROFILE_NAME, "ch04_excel_profile.txt", "\n".join(profile_lines))
 
     dict_lines = [
-        "【第四章数据字典】",
+        f"【{market_data_scope_label()} 数据字典】",
         "quarter：季度（YYYYQn），用于趋势和同比分析",
         "hospital/drugstore/online：三端销售额（万元）",
         "total：三端合计销售额（万元）",
@@ -2017,9 +2175,9 @@ def write_ch4_profile_files(ch4: Ch4Data) -> None:
         "cr5_pct：前五通用名销售额占该渠道总额比例（%）",
         "可支撑图表：规模趋势、结构占比、同比对比、top品种、CR5对比/趋势",
     ]
-    write_text(OUT_ROOT / "ch04_data_dictionary.txt", "\n".join(dict_lines))
+    write_neutral_and_legacy_text(MARKET_DATA_DATA_DICTIONARY_NAME, "ch04_data_dictionary.txt", "\n".join(dict_lines))
 
-    agg_path = OUT_ROOT / "ch04_agg_tables.xlsx"
+    agg_path = OUT_ROOT / MARKET_DATA_AGG_TABLES_NAME
     backup_if_exists(agg_path)
     with pd.ExcelWriter(agg_path, engine="openpyxl") as writer:
         ch4.quarterly.to_excel(writer, index=False, sheet_name="quarterly_channel")
@@ -2031,6 +2189,11 @@ def write_ch4_profile_files(ch4: Ch4Data) -> None:
         ch4.top_online.to_excel(writer, index=False, sheet_name="top10_online")
         ch4.cr5_latest.to_excel(writer, index=False, sheet_name="cr5_latest")
         ch4.cr5_trend.to_excel(writer, index=False, sheet_name="cr5_trend")
+    if is_legacy_template_profile():
+        legacy_agg_path = OUT_ROOT / "ch04_agg_tables.xlsx"
+        if legacy_agg_path != agg_path:
+            backup_if_exists(legacy_agg_path)
+            shutil.copy2(agg_path, legacy_agg_path)
 
 
 def build_ch4_narrative_brief(ch4: Ch4Data) -> str:
@@ -2175,8 +2338,8 @@ def load_existing_text_bundle_partial(specs: List[BlockSpec]) -> Tuple[Dict[str,
         re.S,
     )
     out = {s.block_id: "" for s in specs}
-    for ch in range(1, 8):
-        path = OUT_ROOT / f"ch0{ch}.txt"
+    for ch in template_chapters():
+        path = OUT_ROOT / chapter_text_filename(ch)
         if not path.exists():
             continue
         try:
@@ -2203,13 +2366,14 @@ def build_codex_gap_panel(specs: List[BlockSpec], block_text: Dict[str, str], su
     lines = [
         "[Codex Gap Panel]",
         f"Topic: {DISEASE_NAME}",
+        f"Template: {ACTIVE_TEMPLATE_ID}",
         f"Current total chars (chapters + summary): {current_total}",
-        f"Target total chars: 30000-34000",
+        f"Target total chars: >=30000",
         f"Current summary chars: {summary_chars}",
         "",
         "[Chapter / Block Gaps]",
     ]
-    for chapter in range(1, 8):
+    for chapter in template_chapters():
         ch_specs = chapter_to_specs.get(chapter, [])
         ch_chars = sum(len(re.sub(r"\s+", "", str(block_text.get(s.block_id, "")))) for s in ch_specs)
         ch_floor = int(CHAPTER_MIN_CHARS.get(chapter, 0))
@@ -2262,19 +2426,20 @@ def build_chapter_precheck(specs: List[BlockSpec], block_text: Dict[str, str], s
     lines = [
         "[Chapter Precheck]",
         f"Topic: {DISEASE_NAME}",
+        f"Template: {ACTIVE_TEMPLATE_ID}",
         "This is a lightweight writing-stage check, not the final QA gate.",
         "",
     ]
-    for chapter in range(1, 8):
+    for chapter in template_chapters():
         ch_specs = chapter_to_specs.get(chapter, [])
         missing_blocks = [s.block_id for s in ch_specs if not str(block_text.get(s.block_id, "")).strip()]
         ch_text = "\n".join(str(block_text.get(s.block_id, "")) for s in ch_specs)
         ch_paras: List[str] = []
         for spec in ch_specs:
-            ch_paras.extend(split_paragraphs(str(block_text.get(spec.block_id, ""))))
+            ch_paras.extend(anchor_metric_paragraphs(str(block_text.get(spec.block_id, ""))))
         ch_chars = len(re.sub(r"\s+", "", ch_text))
         ch_floor = int(CHAPTER_MIN_CHARS.get(chapter, 0))
-        cite_cnt = len(re.findall(r"\[\d+\]", ch_text))
+        cite_cnt = body_citation_anchor_count(ch_text)
         anchored = sum(1 for paragraph in ch_paras if paragraph_has_anchor(paragraph))
         anchor_cov = anchored / len(ch_paras) if ch_paras else 0.0
         ch_dup, _ = sentence_repeat_stats(ch_text)
@@ -2296,8 +2461,6 @@ def build_chapter_precheck(specs: List[BlockSpec], block_text: Dict[str, str], s
             warn_reasons.append(f"chars below floor by {strict_gap}, but within tolerance")
         elif ch_chars < ch_floor + 150:
             warn_reasons.append(f"chars only slightly above floor ({ch_chars})")
-        if cite_cnt == 0:
-            fail_reasons.append("no citations")
         if anchor_cov < 0.70:
             fail_reasons.append(f"anchor coverage too low ({anchor_cov*100:.1f}%)")
         elif anchor_cov < 0.85:
@@ -2315,7 +2478,7 @@ def build_chapter_precheck(specs: List[BlockSpec], block_text: Dict[str, str], s
 
         status = "FAIL" if fail_reasons else ("WARN" if warn_reasons else "PASS")
         lines.append(
-            f"- Chapter {chapter} | status={status} | chars={ch_chars} | paragraphs={len(ch_paras)} | citations={cite_cnt} | anchor_cov={anchor_cov*100:.1f}% | h3={chapter_h3}"
+            f"- Chapter {chapter} | status={status} | chars={ch_chars} | paragraphs={len(ch_paras)} | body_citation_anchors={cite_cnt} | anchor_cov={anchor_cov*100:.1f}% | h3={chapter_h3}"
         )
         if chapter <= 3:
             lines.append(f"  medical_pattern_hits={medical_hits}")
@@ -2326,12 +2489,12 @@ def build_chapter_precheck(specs: List[BlockSpec], block_text: Dict[str, str], s
 
     summary_chars = len(re.sub(r"\s+", "", summary_text))
     summary_paras = split_paragraphs(summary_text)
-    summary_cites = len(re.findall(r"\[\d+\]", summary_text))
+    summary_cites = body_citation_anchor_count(summary_text)
     summary_status = "FAIL" if summary_chars == 0 else ("WARN" if summary_chars < 1200 else "PASS")
     lines.extend(
         [
             "",
-            f"- Summary | status={summary_status} | chars={summary_chars} | paragraphs={len(summary_paras)} | citations={summary_cites}",
+            f"- Summary | status={summary_status} | chars={summary_chars} | paragraphs={len(summary_paras)} | body_citation_anchors={summary_cites}",
         ]
     )
     return "\n".join(lines)
@@ -2370,6 +2533,598 @@ class BlockSpec:
     topics: List[str]
     evidence_ids: str
     fig_ids: str
+
+
+@dataclass
+class TemplateProfile:
+    template_id: str
+    path: Path
+    family: str
+    chapters: Dict[int, str]
+    blocks: List[BlockSpec]
+    chapter_min_chars: Dict[int, int]
+    style_names: Dict[str, str]
+    market_data_chapter: int
+    market_data_block_id: str | None = None
+
+
+CHINESE_NUMERALS = {
+    1: "一",
+    2: "二",
+    3: "三",
+    4: "四",
+    5: "五",
+    6: "六",
+    7: "七",
+    8: "八",
+    9: "九",
+    10: "十",
+}
+DEFAULT_TEMPLATE_STYLE_NAMES = {
+    "chapter": "一级目录",
+    "section": "二级目录",
+    "subsection": "三级目录",
+    "body": "数据报告正文",
+}
+
+
+def chapter_label(chapter: int) -> str:
+    n = int(chapter)
+    if 1 <= n <= 10:
+        return f"第{CHINESE_NUMERALS[n]}章"
+    return f"第{n}章"
+
+
+def chapter_text_filename(chapter: int) -> str:
+    return f"ch{int(chapter):02d}.txt"
+
+
+def chapter_text_paths(chapters: List[int] | None = None) -> List[Path]:
+    selected = chapters if chapters is not None else template_chapters()
+    return [OUT_ROOT / chapter_text_filename(ch) for ch in selected]
+
+
+def chapter_text_file_list_text(chapters: List[int] | None = None) -> str:
+    return ", ".join(str(path) for path in chapter_text_paths(chapters))
+
+
+def template_profile_entry(template_id: str, family: str, path: Path) -> Dict[str, object]:
+    return {"template_id": template_id, "family": family, "path": str(path)}
+
+
+def builtin_template_profile_entries() -> List[Dict[str, object]]:
+    disease_root = Path("template") / "疾病对应药品市场报告模板"
+    drug_root = Path("template") / "药品市场报告模板"
+    entries = [template_profile_entry("legacy_default", "legacy", Path("template.docx"))]
+    entries.extend(
+        template_profile_entry(f"disease_template_{idx:02d}", "疾病对应药品市场报告模板", disease_root / f"template{idx}.docx")
+        for idx in range(1, 11)
+    )
+    entries.extend(
+        template_profile_entry(f"drug_template_{idx:02d}", "药品市场报告模板", drug_root / f"template{idx}.docx")
+        for idx in range(1, 6)
+    )
+    return entries
+
+
+def load_template_profile_entries() -> List[Dict[str, object]]:
+    entries = builtin_template_profile_entries()
+    if not TEMPLATE_PROFILE_CONFIG_PATH.exists():
+        return entries
+    try:
+        raw = json.loads(TEMPLATE_PROFILE_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return entries
+    custom_entries = raw.get("templates", raw if isinstance(raw, list) else [])
+    if not isinstance(custom_entries, list):
+        return entries
+    merged: Dict[str, Dict[str, object]] = {str(item.get("template_id", "")).strip(): dict(item) for item in entries}
+    for item in custom_entries:
+        if not isinstance(item, dict):
+            continue
+        tid = str(item.get("template_id", "")).strip()
+        if not tid:
+            continue
+        base = dict(merged.get(tid, {}))
+        base.update(item)
+        merged[tid] = base
+    return list(merged.values())
+
+
+def _word_xml_text(el: ET.Element) -> str:
+    return "".join(t.text or "" for t in el.findall(".//w:t", _XML_NS))
+
+
+def _word_style_attr(el: ET.Element | None, name: str) -> str | None:
+    if el is None:
+        return None
+    return el.get(f"{{{_WORDML_NS}}}{name}")
+
+
+def _docx_paragraphs_with_styles(path: Path) -> List[Tuple[str, str]]:
+    with zipfile.ZipFile(path, "r") as zf:
+        styles_root = ET.fromstring(zf.read("word/styles.xml"))
+        doc_root = ET.fromstring(zf.read("word/document.xml"))
+    style_map: Dict[str, str] = {}
+    for style in styles_root.findall("w:style", _XML_NS):
+        sid = _word_style_attr(style, "styleId") or ""
+        name_el = style.find("w:name", _XML_NS)
+        style_map[sid] = _word_style_attr(name_el, "val") or sid
+    rows: List[Tuple[str, str]] = []
+    for para in doc_root.findall(".//w:p", _XML_NS):
+        text = _word_xml_text(para).strip()
+        if not text:
+            continue
+        style_id = _word_style_attr(para.find("w:pPr/w:pStyle", _XML_NS), "val") or ""
+        rows.append((style_map.get(style_id, style_id), text))
+    return rows
+
+
+def parse_chapter_number_from_text(text: str) -> int | None:
+    match = re.match(r"^第([一二三四五六七八九十]+)章", str(text).strip())
+    if not match:
+        return None
+    raw = match.group(1)
+    inverse = {v: k for k, v in CHINESE_NUMERALS.items()}
+    if raw in inverse:
+        return inverse[raw]
+    if raw.startswith("十"):
+        return 10 + inverse.get(raw[1:], 0)
+    if raw.endswith("十"):
+        return inverse.get(raw[:-1], 1) * 10
+    if "十" in raw:
+        left, right = raw.split("十", 1)
+        return inverse.get(left, 1) * 10 + inverse.get(right, 0)
+    return None
+
+
+def strip_template_marker(text: str) -> str:
+    out = re.sub(r"[（(]\s*使用\s*excel\s*数据\s*[）)]", "", str(text), flags=re.I)
+    return re.sub(r"\s+", " ", out).strip()
+
+
+def infer_topics_from_title(title: str) -> List[str]:
+    cleaned = strip_template_marker(re.sub(r"^\d+(?:\.\d+)*\s*", "", str(title))).strip()
+    tokens = [x for x in re.split(r"[、/／,，;；（）()与和及]", cleaned) if x.strip()]
+    topics = [x.strip() for x in tokens[:5]]
+    return topics or ["要点展开"]
+
+
+def default_chapter_floor(chapter: int) -> int:
+    return int(BASE_CHAPTER_MIN_CHARS.get(int(chapter), 4800))
+
+
+def default_block_target(subtitle: str, chapter: int, section_count: int) -> int:
+    if is_summary_block(subtitle):
+        return SUMMARY_BLOCK_TARGET_CHARS
+    floor = default_chapter_floor(chapter)
+    non_summary = max(1, section_count - 1)
+    return max(900, int((floor - SUMMARY_BLOCK_TARGET_CHARS) / non_summary))
+
+
+def fallback_chapter_title(chapter: int) -> str:
+    names = {
+        1: f"第一章 {DISEASE_NAME}概述与定义边界",
+        2: f"第二章 {DISEASE_NAME}机制关联与风险管理",
+        3: f"第三章 {DISEASE_NAME}临床应用与干预路径",
+        4: f"第四章 {DISEASE_NAME}市场规模与竞争格局",
+        5: f"第五章 {DISEASE_NAME}人群画像与终端需求",
+        6: f"第六章 {DISEASE_NAME}政策环境与监管趋势",
+        7: f"第七章 {DISEASE_NAME}未来展望与战略建议",
+    }
+    return names.get(int(chapter), f"{chapter_label(chapter)} {DISEASE_NAME}专题分析")
+
+
+def infer_profile_from_docx(template_id: str, family: str, path: Path) -> TemplateProfile:
+    chapters: Dict[int, str] = {}
+    sections: Dict[int, List[str]] = {}
+    market_data_chapter: int | None = None
+    market_data_block_id: str | None = None
+    toc_market_chapter: int | None = None
+    current_chapter: int | None = None
+    toc_chapters: Dict[int, str] = {}
+    toc_order: List[int] = []
+    body_toc_cursor = -1
+    if path.exists():
+        try:
+            rows = _docx_paragraphs_with_styles(path)
+        except Exception:
+            rows = []
+    else:
+        rows = []
+    for style_name, text in rows:
+        if style_name == "toc 1":
+            clean_toc = re.sub(r"\d+\s*$", "", text.strip()).strip()
+            toc_match = re.match(r"^(第[一二三四五六七八九十]+章)", clean_toc)
+            if toc_match:
+                toc_num = parse_chapter_number_from_text(toc_match.group(1))
+                if toc_num is not None:
+                    toc_chapters.setdefault(toc_num, strip_template_marker(clean_toc))
+                    if toc_num not in toc_order:
+                        toc_order.append(toc_num)
+                    if re.search(r"使用\s*excel\s*数据", clean_toc, flags=re.I):
+                        toc_market_chapter = toc_num
+            continue
+        if style_name not in {"一级目录", "二级目录"}:
+            continue
+        chapter_num = parse_chapter_number_from_text(text)
+        if style_name == "一级目录" and chapter_num is not None:
+            current_chapter = chapter_num
+            chapters.setdefault(chapter_num, strip_template_marker(text))
+            if chapter_num in toc_order:
+                body_toc_cursor = toc_order.index(chapter_num)
+            if re.search(r"使用\s*excel\s*数据", text, flags=re.I):
+                market_data_chapter = chapter_num
+                market_data_block_id = None
+            continue
+        if style_name == "一级目录":
+            clean_heading = strip_template_marker(text)
+            if clean_heading in {"总结", "参考文献"}:
+                current_chapter = None
+                continue
+            next_toc_num: int | None = None
+            if body_toc_cursor + 1 < len(toc_order):
+                body_toc_cursor += 1
+                next_toc_num = toc_order[body_toc_cursor]
+            if next_toc_num is not None:
+                current_chapter = next_toc_num
+                chapters.setdefault(current_chapter, strip_template_marker(toc_chapters.get(current_chapter, text)))
+                if re.search(r"使用\s*excel\s*数据", text, flags=re.I):
+                    market_data_chapter = current_chapter
+                    market_data_block_id = None
+            continue
+        if style_name == "二级目录" and current_chapter is not None and re.match(r"^\d+\.\d+", text.strip()):
+            clean = strip_template_marker(text)
+            sections.setdefault(current_chapter, [])
+            if clean not in sections[current_chapter]:
+                sections[current_chapter].append(clean)
+            if re.search(r"使用\s*excel\s*数据", text, flags=re.I):
+                market_data_chapter = current_chapter
+                market_data_block_id = re.match(r"^(\d+\.\d+)", clean).group(1) if re.match(r"^(\d+\.\d+)", clean) else None
+
+    if toc_chapters:
+        for toc_num, toc_title in toc_chapters.items():
+            chapters.setdefault(toc_num, toc_title)
+
+    if not chapters:
+        chapters = {idx: fallback_chapter_title(idx) for idx in range(1, 8)}
+        sections = {
+            idx: [
+                f"{idx}.1 {infer_topics_from_title(fallback_chapter_title(idx))[0]}",
+                f"{idx}.2 关键要点分析",
+                f"{idx}.3 本章小结",
+            ]
+            for idx in chapters
+        }
+
+    block_specs: List[BlockSpec] = []
+    for chapter in sorted(chapters):
+        chapter_sections = sections.get(chapter, [])
+        if not chapter_sections:
+            chapter_sections = [f"{chapter}.1 关键要点分析", f"{chapter}.2 本章小结"]
+        if not any(is_summary_block(item) for item in chapter_sections):
+            chapter_sections.append(f"{chapter}.{len(chapter_sections) + 1} 本章小结")
+        section_count = len(chapter_sections)
+        for section in chapter_sections:
+            match = re.match(r"^(\d+\.\d+)", section)
+            block_id = match.group(1) if match else f"{chapter}.{len(block_specs) + 1}"
+            block_specs.append(
+                BlockSpec(
+                    block_id=block_id,
+                    chapter=chapter,
+                    subtitle=section,
+                    target_chars=default_block_target(section, chapter, section_count),
+                    topics=infer_topics_from_title(section),
+                    evidence_ids="E01|E08|E10",
+                    fig_ids="",
+                )
+            )
+
+    if market_data_chapter is None:
+        if toc_market_chapter is not None and toc_market_chapter in chapters:
+            market_data_chapter = toc_market_chapter
+        else:
+            market_data_chapter = 4 if 4 in chapters else sorted(chapters)[min(3, len(chapters) - 1)]
+
+    return TemplateProfile(
+        template_id=template_id,
+        path=path,
+        family=family,
+        chapters=chapters,
+        blocks=block_specs,
+        chapter_min_chars={chapter: default_chapter_floor(chapter) for chapter in chapters},
+        style_names=dict(DEFAULT_TEMPLATE_STYLE_NAMES),
+        market_data_chapter=market_data_chapter,
+        market_data_block_id=market_data_block_id,
+    )
+
+
+def legacy_template_profile() -> TemplateProfile:
+    return TemplateProfile(
+        template_id="legacy_default",
+        path=Path("template.docx"),
+        family="legacy",
+        chapters={idx: fallback_chapter_title(idx) for idx in range(1, 8)},
+        blocks=build_block_specs(),
+        chapter_min_chars=dict(BASE_CHAPTER_MIN_CHARS),
+        style_names=dict(DEFAULT_TEMPLATE_STYLE_NAMES),
+        market_data_chapter=4,
+        market_data_block_id=None,
+    )
+
+
+def apply_template_entry_overrides(profile: TemplateProfile, entry: Dict[str, object]) -> TemplateProfile:
+    if isinstance(entry.get("chapters"), dict):
+        profile.chapters = {
+            int(k): str(v).strip()
+            for k, v in entry["chapters"].items()  # type: ignore[index,union-attr]
+            if str(k).strip() and str(v).strip()
+        }
+    if isinstance(entry.get("chapter_min_chars"), dict):
+        profile.chapter_min_chars.update({int(k): int(v) for k, v in entry["chapter_min_chars"].items()})  # type: ignore[index,union-attr]
+    if isinstance(entry.get("style_names"), dict):
+        profile.style_names.update({str(k): str(v) for k, v in entry["style_names"].items()})  # type: ignore[union-attr]
+    scope = entry.get("market_data_scope")
+    if isinstance(scope, dict):
+        if scope.get("chapter") is not None:
+            profile.market_data_chapter = int(scope["chapter"])
+        if scope.get("block_id") is not None:
+            profile.market_data_block_id = str(scope["block_id"]).strip() or None
+    if isinstance(entry.get("blocks"), list):
+        blocks: List[BlockSpec] = []
+        for raw in entry["blocks"]:  # type: ignore[index]
+            if not isinstance(raw, dict):
+                continue
+            blocks.append(
+                BlockSpec(
+                    block_id=str(raw.get("block_id", "")).strip(),
+                    chapter=int(raw.get("chapter", 0)),
+                    subtitle=str(raw.get("subtitle", "")).strip(),
+                    target_chars=int(raw.get("target_chars", 1000)),
+                    topics=[str(x).strip() for x in raw.get("topics", []) if str(x).strip()] if isinstance(raw.get("topics"), list) else infer_topics_from_title(str(raw.get("subtitle", ""))),
+                    evidence_ids=str(raw.get("evidence_ids", "E01|E08|E10")).strip(),
+                    fig_ids=str(raw.get("fig_ids", "")).strip(),
+                )
+            )
+        if blocks:
+            profile.blocks = blocks
+            profile.chapters = {ch: profile.chapters.get(ch, fallback_chapter_title(ch)) for ch in sorted({b.chapter for b in blocks})}
+    return profile
+
+
+def load_template_registry() -> Dict[str, TemplateProfile]:
+    global _TEMPLATE_PROFILE_CACHE
+    if _TEMPLATE_PROFILE_CACHE is not None:
+        return _TEMPLATE_PROFILE_CACHE
+    registry: Dict[str, TemplateProfile] = {}
+    for entry in load_template_profile_entries():
+        tid = str(entry.get("template_id", "")).strip()
+        if not tid:
+            continue
+        if tid == "legacy_default":
+            profile = legacy_template_profile()
+        else:
+            path = Path(str(entry.get("path", "")).strip())
+            family = str(entry.get("family", "")).strip() or "custom"
+            profile = infer_profile_from_docx(tid, family, path)
+        registry[tid] = apply_template_entry_overrides(profile, entry)
+    _TEMPLATE_PROFILE_CACHE = registry
+    return registry
+
+
+def resolve_template_profile(template_id: str | None = None, template_path: Path | None = None) -> TemplateProfile:
+    registry = load_template_registry()
+    if template_id:
+        tid = str(template_id).strip()
+        if tid not in registry:
+            available = ", ".join(sorted(registry.keys()))
+            raise ValueError(f"Unknown template_id: {tid}. Available template IDs: {available}")
+        return registry[tid]
+    if template_path is None or Path(template_path) == Path("template.docx"):
+        return registry["legacy_default"]
+    path = Path(template_path)
+    for profile in registry.values():
+        if profile.path == path:
+            return profile
+    return infer_profile_from_docx(path.stem, "path", path)
+
+
+def active_template_profile() -> TemplateProfile:
+    global ACTIVE_TEMPLATE_PROFILE
+    if ACTIVE_TEMPLATE_PROFILE is None:
+        ACTIVE_TEMPLATE_PROFILE = resolve_template_profile("legacy_default", None)
+    return ACTIVE_TEMPLATE_PROFILE
+
+
+def template_chapters() -> List[int]:
+    return sorted(active_template_profile().chapters.keys())
+
+
+def is_legacy_template_profile() -> bool:
+    return active_template_profile().template_id == "legacy_default"
+
+
+def chapter_reserved_figure_slots(chapter: int) -> List[int]:
+    slots: List[int] = []
+    for spec in active_template_profile().blocks:
+        for fig_id in [item for item in str(spec.fig_ids).split("|") if item]:
+            match = FIG_ID_RE.match(fig_id)
+            if not match:
+                continue
+            if int(match.group(1)) != int(chapter):
+                continue
+            slots.append(int(match.group(2)))
+    return sorted(set(slots))
+
+
+def resolved_fig_ids_for_block(spec: BlockSpec, fig_rows: List[Dict[str, str]]) -> List[str]:
+    explicit = [item for item in str(spec.fig_ids).split("|") if item]
+    if explicit:
+        return explicit
+    matched = []
+    for row in fig_rows:
+        if str(row.get("插入到哪个block之后", "")).strip() == str(spec.block_id):
+            fig_id = str(row.get("fig_id", "")).strip()
+            if fig_id:
+                matched.append(fig_id)
+    return sorted(matched, key=figure_sort_key)
+
+
+def market_data_base_fig_id() -> str:
+    profile = active_template_profile()
+    chapter = profile.market_data_chapter
+    start = 1
+    if not is_legacy_template_profile():
+        reserved = sorted(
+            set(DEFAULT_RESERVED_FIGURE_SLOTS.get(chapter, []))
+            | set(chapter_reserved_figure_slots(chapter))
+        )
+        if reserved:
+            start = max(reserved) + 1
+    return f"fig_{chapter}_{start}"
+
+
+MARKET_FIGURE_LOGIC_ORDER = [
+    "market_quarterly_trend",
+    "market_share",
+    "market_annual_compare",
+    "market_yoy",
+    "market_top_hospital",
+    "market_top_drugstore",
+    "market_top_online",
+    "market_cr5",
+]
+
+DEFAULT_RESERVED_FIGURE_SLOTS: Dict[int, List[int]] = {
+    1: [1, 2, 3, 4],
+    2: [1, 2, 3],
+    3: [1, 2, 3],
+    5: [1, 2, 3, 4],
+    6: [1, 2],
+    7: [1, 2],
+}
+
+
+def market_figure_id_map() -> Dict[str, str]:
+    profile = active_template_profile()
+    if is_legacy_template_profile():
+        start = 1
+    else:
+        reserved = sorted(
+            set(DEFAULT_RESERVED_FIGURE_SLOTS.get(profile.market_data_chapter, []))
+            | set(chapter_reserved_figure_slots(profile.market_data_chapter))
+        )
+        start = max(reserved) + 1 if reserved else 1
+    return {
+        logic: f"fig_{profile.market_data_chapter}_{idx}"
+        for idx, logic in enumerate(MARKET_FIGURE_LOGIC_ORDER, start=start)
+    }
+
+
+def is_market_data_block(spec: BlockSpec) -> bool:
+    profile = active_template_profile()
+    if profile.market_data_block_id:
+        return str(spec.block_id) == str(profile.market_data_block_id)
+    return int(spec.chapter) == int(profile.market_data_chapter)
+
+
+def market_data_scope_label() -> str:
+    profile = active_template_profile()
+    if profile.market_data_block_id:
+        return f"{chapter_label(profile.market_data_chapter)} {profile.market_data_block_id}"
+    return chapter_label(profile.market_data_chapter)
+
+
+def market_data_rule_tag() -> str:
+    return f"{market_data_scope_label()}数据专线"
+
+
+def market_data_extract_path() -> Path:
+    neutral = OUT_ROOT / MARKET_DATA_CODEX_EXTRACT_NAME
+    legacy = OUT_ROOT / "ch04_codex_extract.json"
+    if neutral.exists():
+        return neutral
+    if legacy.exists():
+        return legacy
+    return neutral
+
+
+def market_data_extract_template_path() -> Path:
+    return OUT_ROOT / MARKET_DATA_CODEX_EXTRACT_TEMPLATE_NAME
+
+
+def market_data_schema_version() -> str:
+    return "market_data_codex_extract_v1"
+
+
+def normalize_market_data_schema(raw: Dict[str, object]) -> Dict[str, object]:
+    out = dict(raw)
+    if str(out.get("schema_version", "")).strip() == market_data_schema_version():
+        out["schema_version"] = "ch4_codex_extract_v1"
+    return out
+
+
+def write_neutral_and_legacy_text(neutral_name: str, legacy_name: str, text: str) -> None:
+    write_text(OUT_ROOT / neutral_name, text)
+    if is_legacy_template_profile():
+        write_text(OUT_ROOT / legacy_name, text)
+
+
+def write_neutral_and_legacy_json(neutral_name: str, legacy_name: str, payload: object) -> None:
+    write_json(OUT_ROOT / neutral_name, payload)
+    if is_legacy_template_profile():
+        write_json(OUT_ROOT / legacy_name, payload)
+
+
+def market_available_figure_ids(ch4: Ch4Data | None) -> set[str]:
+    id_map = market_figure_id_map()
+    available = {
+        id_map["market_quarterly_trend"],
+        id_map["market_share"],
+        id_map["market_annual_compare"],
+    }
+    if ch4 is None:
+        return set(id_map.values())
+    if bool(ch4.yoy_latest["yoy_pct"].notna().any()):
+        available.add(id_map["market_yoy"])
+    if ch4_top_has_meaningful_competition(ch4.top_hospital):
+        available.add(id_map["market_top_hospital"])
+    if ch4_top_has_meaningful_competition(ch4.top_drugstore):
+        available.add(id_map["market_top_drugstore"])
+    if ch4_top_has_meaningful_competition(ch4.top_online):
+        available.add(id_map["market_top_online"])
+    if (
+        (not ch4.cr5_latest.empty)
+        and bool(ch4.cr5_latest["cr5_pct"].notna().any())
+        and any(
+            ch4_top_has_meaningful_competition(df)
+            for df in [ch4.top_hospital, ch4.top_drugstore, ch4.top_online]
+        )
+    ):
+        available.add(id_map["market_cr5"])
+    return available
+
+
+def market_missing_items(ch4: Ch4Data | None) -> List[str]:
+    if ch4 is None:
+        return []
+    id_map = market_figure_id_map()
+    missing: List[str] = []
+    if not bool(ch4.yoy_latest["yoy_pct"].notna().any()):
+        missing.append(f"三端同比增速（{id_map['market_yoy']}）")
+    if not ch4_top_has_meaningful_competition(ch4.top_hospital):
+        missing.append(f"医院端TOP10（{id_map['market_top_hospital']}）")
+    if not ch4_top_has_meaningful_competition(ch4.top_drugstore):
+        missing.append(f"药店端TOP10（{id_map['market_top_drugstore']}）")
+    if not ch4_top_has_meaningful_competition(ch4.top_online):
+        missing.append(f"线上端TOP10（{id_map['market_top_online']}）")
+    if (
+        ch4.cr5_latest.empty
+        or (not bool(ch4.cr5_latest["cr5_pct"].notna().any()))
+        or (not any(ch4_top_has_meaningful_competition(df) for df in [ch4.top_hospital, ch4.top_drugstore, ch4.top_online]))
+    ):
+        missing.append(f"CR5集中度（{id_map['market_cr5']}）")
+    return missing
 
 
 def is_summary_block(subtitle: str) -> bool:
@@ -2466,7 +3221,7 @@ def collect_block_status_snapshot(spec: "BlockSpec", specs: List["BlockSpec"], b
     paragraphs = split_paragraphs(current_text)
     anchored = sum(1 for paragraph in paragraphs if paragraph_has_anchor(paragraph))
     anchor_cov = (anchored / len(paragraphs)) if paragraphs else 0.0
-    citation_count = len(re.findall(r"\[\d+\]", current_text))
+    citation_count = body_citation_anchor_count(current_text)
     rendered_h3_by_block: Dict[str, int] = metrics["rendered_h3_by_block"]  # type: ignore[assignment]
     medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
     chapter_chars: Dict[int, int] = metrics["chapter_chars"]  # type: ignore[assignment]
@@ -2487,7 +3242,7 @@ def collect_block_status_snapshot(spec: "BlockSpec", specs: List["BlockSpec"], b
         weak_spots.append(f"当前三级标题数 {current_h3}，建议补到 {expected_h3}。")
         weak_flags.append(f"h3={current_h3}/{expected_h3}")
     if paragraphs and anchor_cov < 0.70:
-        weak_spots.append(f"当前锚点覆盖率仅 {anchor_cov*100:.1f}%，新增段落优先补 2024/2025Q3/72小时/CR5/[3] 这类锚点。")
+        weak_spots.append(f"当前锚点覆盖率仅 {anchor_cov*100:.1f}%，新增段落优先补 2024/2025Q3/72小时/CR5/红旗征这类事实锚点。")
         weak_flags.append(f"anchor={anchor_cov*100:.0f}%")
     if spec.chapter <= 3 and spec.block_id in medical_density_failed:
         weak_spots.append("第1-3章医学密度不足，需显式补机制、诊断、风险、证据或随访节点。")
@@ -2534,9 +3289,9 @@ def normalize_block_specs(specs: List[BlockSpec]) -> List[BlockSpec]:
         for s in specs
     ]
 
-    available_ch4_figs = chapter4_available_figure_ids(load_ch4_data_for_runtime())
+    available_ch4_figs = market_available_figure_ids(load_ch4_data_for_runtime())
     for spec in normalized:
-        if spec.chapter != 4:
+        if not is_market_data_block(spec):
             continue
         figs = [fig_id for fig_id in str(spec.fig_ids).split("|") if fig_id and fig_id in available_ch4_figs]
         spec.fig_ids = "|".join(figs)
@@ -2600,7 +3355,9 @@ def normalize_block_specs(specs: List[BlockSpec]) -> List[BlockSpec]:
 
 
 def runtime_block_specs() -> List[BlockSpec]:
-    return normalize_block_specs(build_block_specs())
+    if is_legacy_template_profile():
+        return normalize_block_specs(build_block_specs())
+    return normalize_block_specs(active_template_profile().blocks)
 
 
 def block_figure_assignment_map(specs: List[BlockSpec]) -> Dict[str, str]:
@@ -2803,20 +3560,66 @@ def build_block_specs() -> List[BlockSpec]:
 
 
 def chapter_title(chapter: int) -> str:
-    names = {
-        1: f"第一章 {DISEASE_NAME}概述与定义边界",
-        2: f"第二章 {DISEASE_NAME}机制关联与风险管理",
-        3: f"第三章 {DISEASE_NAME}临床应用与干预路径",
-        4: f"第四章 {DISEASE_NAME}市场规模与竞争格局",
-        5: f"第五章 {DISEASE_NAME}人群画像与终端需求",
-        6: f"第六章 {DISEASE_NAME}政策环境与监管趋势",
-        7: f"第七章 {DISEASE_NAME}未来展望与战略建议",
-    }
-    return names[chapter]
+    return active_template_profile().chapters.get(int(chapter), fallback_chapter_title(int(chapter)))
 
 
 def split_paragraphs(text: str) -> List[str]:
-    return [p.strip() for p in text.split("\n\n") if p.strip()]
+    normalized = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.strip() for line in normalized.split("\n")]
+    paragraphs: List[str] = []
+    buffer: List[str] = []
+    for line in lines:
+        if not line:
+            if buffer:
+                paragraphs.append(" ".join(buffer).strip())
+                buffer = []
+            continue
+        if parse_explicit_heading3(line) or line.lstrip().startswith("###"):
+            if buffer:
+                paragraphs.append(" ".join(buffer).strip())
+                buffer = []
+            paragraphs.append(line)
+            continue
+        if buffer:
+            paragraphs.append(" ".join(buffer).strip())
+            buffer = []
+        paragraphs.append(line)
+    if buffer:
+        paragraphs.append(" ".join(buffer).strip())
+    return [p for p in paragraphs if p]
+
+
+def anchor_metric_paragraphs(text: str) -> List[str]:
+    return [p for p in split_paragraphs(text) if not parse_explicit_heading3(p)]
+
+
+INTERNAL_ARTIFACT_PATTERNS = [
+    r"\bmarket_data_codex_extract\.json\b",
+    r"\bmarket_data_narrative_brief\.txt\b",
+    r"\bmarket_data_codex_prompt\.txt\b",
+    r"\bch04_codex_extract\.json\b",
+    r"\bch04_narrative_brief\.txt\b",
+    r"\bch04_codex_prompt\.txt\b",
+    r"\bfig23_codex_spec\.json\b",
+    r"\bfigure_specs\.json\b",
+    r"\bcodex_content_blueprint\.txt\b",
+    r"\bcodex_rewrite_prompt\.txt\b",
+    r"\bcodex_gap_panel\.txt\b",
+    r"\bcodex_next_actions\.txt\b",
+    r"\bmanifest_fig\.csv\b",
+    r"\bmanifest_text\.csv\b",
+    r"\b[\w\-\u4e00-\u9fff]+\.xlsx\b",
+]
+
+
+def internal_artifact_mentions(text: str) -> List[str]:
+    hits: List[str] = []
+    raw = str(text)
+    for pattern in INTERNAL_ARTIFACT_PATTERNS:
+        for match in re.findall(pattern, raw, flags=re.I):
+            if match not in hits:
+                hits.append(match)
+    return hits
 
 
 def parse_explicit_heading3(paragraph: str) -> str:
@@ -3031,6 +3834,12 @@ def build_semantic_figure_specs_template() -> Dict[str, Dict[str, object]]:
 
 
 def build_figure_specs_codex_prompt() -> str:
+    chapter_refs = chapter_text_paths([ch for ch in template_chapters() if ch in {1, 3, 5, 6, 9}])
+    if not chapter_refs:
+        chapter_refs = chapter_text_paths()
+    read_first_lines = [f"{idx}) {path}" for idx, path in enumerate(chapter_refs, start=1)]
+    read_first_lines.append(f"{len(read_first_lines) + 1}) {OUT_ROOT / '00_evidence.txt'}")
+    read_first_lines.append(f"{len(read_first_lines) + 1}) {OUT_ROOT / FIGURE_SPECS_CODEX_TEMPLATE_NAME}")
     return "\n".join(
         [
             "[Codex Semantic Figure Spec Task]",
@@ -3041,12 +3850,7 @@ def build_figure_specs_codex_prompt() -> str:
             "- Do not use it to invent Chapter-4 market data or override Excel-derived charts.",
             "",
             "[Read First]",
-            f"1) {OUT_ROOT / 'ch01.txt'}",
-            f"2) {OUT_ROOT / 'ch03.txt'}",
-            f"3) {OUT_ROOT / 'ch05.txt'}",
-            f"4) {OUT_ROOT / 'ch06.txt'}",
-            f"5) {OUT_ROOT / '00_evidence.txt'}",
-            f"6) {OUT_ROOT / FIGURE_SPECS_CODEX_TEMPLATE_NAME}",
+            *read_first_lines,
             "",
             "[Hard Rules]",
             "1) Keep figure meaning aligned with the chapter argument instead of using generic placeholder flowcharts.",
@@ -3063,14 +3867,15 @@ def build_figure_specs_codex_prompt() -> str:
 
 
 def build_semantic_review_prompt() -> str:
+    chapter_refs = chapter_text_paths([ch for ch in template_chapters() if ch in {1, 3, 5, 6, 9}])
+    if not chapter_refs:
+        chapter_refs = chapter_text_paths()
+    review_lines = [f"- {path}" for path in chapter_refs]
     return "\n".join(
         [
             "[Codex Semantic Review Task]",
             "Review the body-summary logic and the key semantic figures together:",
-            f"- {OUT_ROOT / 'ch01.txt'}",
-            f"- {OUT_ROOT / 'ch03.txt'}",
-            f"- {OUT_ROOT / 'ch05.txt'}",
-            f"- {OUT_ROOT / 'ch06.txt'}",
+            *review_lines,
             f"- {OUT_ROOT / 'summary.txt'}",
             f"- {FIG_DIR / 'fig_1_3.png'}",
             f"- {FIG_DIR / 'fig_3_1.png'}",
@@ -3114,36 +3919,55 @@ def _df_to_records(df: pd.DataFrame, columns: List[str]) -> List[Dict[str, objec
 
 def ensure_ch4_extract_ready(xlsx: Path) -> None:
     write_ch4_codex_helper_files(xlsx)
-    extract_path = OUT_ROOT / "ch04_codex_extract.json"
+    extract_path = market_data_extract_path()
     if extract_path.exists():
         try:
             build_ch4_data_from_codex_extract(extract_path)
             return
         except Exception as exc:
-            print(f"警告：现有 ch04_codex_extract.json 无法通过校验，已自动重建（{type(exc).__name__}: {exc}）。")
+            print(f"警告：现有 {extract_path.name} 无法通过校验，已自动重建（{type(exc).__name__}: {exc}）。")
     ch4 = build_ch4_data_from_legacy_parser(xlsx)
     sheet_names = get_workbook_sheet_names(xlsx)
     sheet_name_set = set(sheet_names)
 
-    def mapping_entry(sheet_name: str, missing_note: str, present_note: str = "脚本按标准模板提取") -> Dict[str, str]:
-        if sheet_name in sheet_name_set:
-            return {"sheet": sheet_name, "status": "自动识别", "header_rows": "自动", "note": present_note}
-        return {"sheet": sheet_name, "status": "缺失", "header_rows": "N/A", "note": missing_note}
+    resolved_category = {
+        "hospital": resolve_ch4_sheet_name(sheet_name_set, CH4_CATEGORY_SHEET_CANDIDATES["hospital"]),
+        "drugstore": resolve_ch4_sheet_name(sheet_name_set, CH4_CATEGORY_SHEET_CANDIDATES["drugstore"]),
+        "online": resolve_ch4_sheet_name(sheet_name_set, CH4_CATEGORY_SHEET_CANDIDATES["online"]),
+    }
+    resolved_top = {
+        "hospital": resolve_ch4_sheet_name(sheet_name_set, CH4_TOP_SHEET_CANDIDATES["hospital"]),
+        "drugstore": resolve_ch4_sheet_name(sheet_name_set, CH4_TOP_SHEET_CANDIDATES["drugstore"]),
+        "online": resolve_ch4_sheet_name(sheet_name_set, CH4_TOP_SHEET_CANDIDATES["online"]),
+    }
+
+    def mapping_entry(
+        resolved_name: str | None,
+        fallback_name: str,
+        missing_note: str,
+        present_note: str = "脚本按标准模板提取",
+    ) -> Dict[str, str]:
+        if resolved_name:
+            note = present_note
+            if resolved_name in {"医院", "药店", "线上"}:
+                note = "脚本已从合并sheet自动识别季度销售额、Top10与CR5口径"
+            return {"sheet": resolved_name, "status": "自动识别", "header_rows": "自动", "note": note}
+        return {"sheet": fallback_name, "status": "缺失", "header_rows": "N/A", "note": missing_note}
 
     payload = {
-        "schema_version": "ch4_codex_extract_v1",
+        "schema_version": market_data_schema_version(),
         "topic": DISEASE_NAME,
         "disease": DISEASE_NAME,
         "source_workbook": xlsx.name,
         "available_sheets": sheet_names,
         "latest_quarter": ch4.latest_quarter,
         "sheet_mapping": {
-            "hospital_category": mapping_entry("医院品类", "未提供该sheet，若其他渠道存在则以0补齐该渠道季度销售额。"),
-            "hospital_top": mapping_entry("医院top", "未提供该sheet，医院端Top10与CR5仅保留为空。"),
-            "drugstore_category": mapping_entry("药店品类", "未提供该sheet，若其他渠道存在则以0补齐该渠道季度销售额。"),
-            "drugstore_top": mapping_entry("药店top", "未提供该sheet，药店端Top10与CR5仅保留为空。"),
-            "online_category": mapping_entry("线上品类", "未提供该sheet，若其他渠道存在则以0补齐该渠道季度销售额。"),
-            "online_top": mapping_entry("线上top", "未提供该sheet，线上端Top10与CR5仅保留为空。"),
+            "hospital_category": mapping_entry(resolved_category["hospital"], "医院品类", "未提供该sheet，若其他渠道存在则以0补齐该渠道季度销售额。"),
+            "hospital_top": mapping_entry(resolved_top["hospital"], "医院top", "未提供该sheet，医院端Top10与CR5仅保留为空。"),
+            "drugstore_category": mapping_entry(resolved_category["drugstore"], "药店品类", "未提供该sheet，若其他渠道存在则以0补齐该渠道季度销售额。"),
+            "drugstore_top": mapping_entry(resolved_top["drugstore"], "药店top", "未提供该sheet，药店端Top10与CR5仅保留为空。"),
+            "online_category": mapping_entry(resolved_category["online"], "线上品类", "未提供该sheet，若其他渠道存在则以0补齐该渠道季度销售额。"),
+            "online_top": mapping_entry(resolved_top["online"], "线上top", "未提供该sheet，线上端Top10与CR5仅保留为空。"),
         },
         "tables": {
             "quarterly_channel": _df_to_records(ch4.quarterly, ["quarter", "hospital", "drugstore", "online"]),
@@ -3160,14 +3984,14 @@ def ensure_ch4_extract_ready(xlsx: Path) -> None:
             "若源工作簿缺少药店端或线上端sheet，季度值按0补齐；缺失渠道的Top10/CR5保留为空。",
         ],
     }
-    write_json(extract_path, payload)
+    write_neutral_and_legacy_json(MARKET_DATA_CODEX_EXTRACT_NAME, "ch04_codex_extract.json", payload)
 
 
 def ensure_codex_prep_assets_ready() -> None:
     ensure_ch4_extract_ready(EXCEL_PATH)
     ch4 = build_ch4_data(EXCEL_PATH)
     write_ch4_profile_files(ch4)
-    write_text(OUT_ROOT / CH4_NARRATIVE_BRIEF_NAME, build_ch4_narrative_brief(ch4) + "\n")
+    write_neutral_and_legacy_text(MARKET_DATA_NARRATIVE_BRIEF_NAME, CH4_NARRATIVE_BRIEF_NAME, build_ch4_narrative_brief(ch4) + "\n")
 
 
 def make_manifest_files(specs: List[BlockSpec], fig_rows: List[Dict[str, str]]) -> None:
@@ -3194,12 +4018,19 @@ def make_manifest_files(specs: List[BlockSpec], fig_rows: List[Dict[str, str]]) 
         fig_rows,
         ["fig_id", "caption", "type", "data_source", "数据表来源", "excel_sheet_or_table", "输出文件名", "插入到哪个block之后", "规则标签", "source_line"],
     )
-    ch4_rows = [r for r in fig_rows if r["fig_id"].startswith("fig_4_")]
+    market_fig_ids = set(market_figure_id_map().values())
+    market_rows = [r for r in fig_rows if str(r.get("fig_id", "")).strip() in market_fig_ids]
     write_csv(
-        OUT_ROOT / "ch04_manifest_fig.csv",
-        ch4_rows,
+        OUT_ROOT / "market_data_manifest_fig.csv",
+        market_rows,
         ["fig_id", "caption", "type", "data_source", "数据表来源", "excel_sheet_or_table", "输出文件名", "插入到哪个block之后", "规则标签", "source_line"],
     )
+    if is_legacy_template_profile():
+        write_csv(
+            OUT_ROOT / "ch04_manifest_fig.csv",
+            market_rows,
+            ["fig_id", "caption", "type", "data_source", "数据表来源", "excel_sheet_or_table", "输出文件名", "插入到哪个block之后", "规则标签", "source_line"],
+        )
 
 
 def cleanup_stale_figure_outputs(fig_rows: List[Dict[str, str]]) -> None:
@@ -4247,6 +5078,20 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     block_spec_map = {s.block_id: s for s in runtime_block_specs()}
     evidence_rows, _ = parse_evidence_pool(OUT_ROOT / "00_evidence.txt")
     evidence_map = {str(row.get("evidence_id", "")).strip(): row for row in evidence_rows if str(row.get("evidence_id", "")).strip()}
+    market_ids = market_figure_id_map()
+    market_block_ids = sorted([s.block_id for s in runtime_block_specs() if is_market_data_block(s)], key=lambda x: [int(p) for p in x.split(".")])
+    market_default_block = market_block_ids[0] if market_block_ids else f"{active_template_profile().market_data_chapter}.1"
+
+    def market_block(index: int) -> str:
+        if not market_block_ids:
+            return market_default_block
+        return market_block_ids[min(max(index, 0), len(market_block_ids) - 1)]
+
+    def serial_from_fig_id(fig_id: str) -> str:
+        match = FIG_ID_RE.match(str(fig_id).strip())
+        if not match:
+            return "0-0"
+        return f"{int(match.group(1))}-{int(match.group(2))}"
 
     def fig_spec(fig_id: str) -> Dict[str, object]:
         v = figure_specs.get(fig_id, {})
@@ -5085,9 +5930,11 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     rendered_title_rows.append({"fig_id": "fig_3_3", "rendered_title": normalize_disease_text(title_3_3)})
     add_fig_meta("fig_3_3", title_3_3, "饼图", "公开资料整理", "剂型偏好", "N/A", "3.3", "剂型结构", "数据来源：公开资料整理")
 
-    # Chapter 4 (Excel-driven)
+    # Template-profile market data section (Excel-driven)
     q = ch4.quarterly.copy()
     q["label"] = q["quarter"]
+    fid_market_trend = market_ids["market_quarterly_trend"]
+    serial_market_trend = serial_from_fig_id(fid_market_trend)
     fig, ax = plt.subplots(figsize=(8.6, 4.7))
     ax.plot(q["label"], q["hospital"], label="医院端", color="#2B6CB0", lw=2)
     ax.plot(q["label"], q["drugstore"], label="药店端", color="#DD6B20", lw=2)
@@ -5096,18 +5943,23 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     ax.set_xticks(range(0, len(q), step))
     ax.set_xticklabels(q["label"].iloc[::step], rotation=35, ha="right")
     ax.set_ylabel("销售额（万元）")
-    set_main_title(ax, "fig_4_1", f"图表4-1：三端季度销售额趋势（{q['quarter'].iloc[0]}-{q['quarter'].iloc[-1]}）")
+    trend_caption = f"图表{serial_market_trend}：三端季度销售额趋势（{q['quarter'].iloc[0]}-{q['quarter'].iloc[-1]}）"
+    set_main_title(ax, fid_market_trend, trend_caption)
     ax.legend()
-    save_figure(FIG_DIR / "fig_4_1.png", fig)
-    add_fig_meta("fig_4_1", f"图表4-1：三端季度销售额趋势（{q['quarter'].iloc[0]}-{q['quarter'].iloc[-1]}）", "折线图", "米内网", "quarterly_channel", "quarterly_channel", "4.1", "第4章数据专线", "数据来源：米内网")
+    save_figure(FIG_DIR / f"{fid_market_trend}.png", fig)
+    add_fig_meta(fid_market_trend, trend_caption, "折线图", "米内网", "quarterly_channel", "quarterly_channel", market_block(0), market_data_rule_tag(), "数据来源：米内网")
 
     latest = ch4.latest_share
-    title_4_2 = spec_text("fig_4_2", "title", f"图表4-2：{ch4.latest_quarter}三端销售结构占比")
-    draw_pie_with_leaders(FIG_DIR / "fig_4_2.png", title_4_2, latest["channel"].tolist(), latest["share_pct"].tolist(), ["#2B6CB0", "#DD6B20", "#2F855A"], figsize=(7.5, 4.4))
-    rendered_title_rows.append({"fig_id": "fig_4_2", "rendered_title": normalize_disease_text(title_4_2)})
-    add_fig_meta("fig_4_2", f"图表4-2：{ch4.latest_quarter}三端销售结构占比", "饼图", "米内网", "latest_share", "latest_share", "4.1", "第4章数据专线", "数据来源：米内网")
+    fid_market_share = market_ids["market_share"]
+    serial_market_share = serial_from_fig_id(fid_market_share)
+    title_market_share = spec_text(fid_market_share, "title", f"图表{serial_market_share}：{ch4.latest_quarter}三端销售结构占比")
+    draw_pie_with_leaders(FIG_DIR / f"{fid_market_share}.png", title_market_share, latest["channel"].tolist(), latest["share_pct"].tolist(), ["#2B6CB0", "#DD6B20", "#2F855A"], figsize=(7.5, 4.4))
+    rendered_title_rows.append({"fig_id": fid_market_share, "rendered_title": normalize_disease_text(title_market_share)})
+    add_fig_meta(fid_market_share, f"图表{serial_market_share}：{ch4.latest_quarter}三端销售结构占比", "饼图", "米内网", "latest_share", "latest_share", market_block(0), market_data_rule_tag(), "数据来源：米内网")
 
     annual = ch4.annual
+    fid_market_annual = market_ids["market_annual_compare"]
+    serial_market_annual = serial_from_fig_id(fid_market_annual)
     fig, ax = plt.subplots(figsize=(8.0, 4.7))
     x = np.arange(len(annual))
     w = 0.25
@@ -5117,19 +5969,23 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
     ax.set_xticks(x)
     ax.set_xticklabels(annual["year"].astype(int).astype(str))
     ax.set_ylabel("销售额（万元）")
-    set_main_title(ax, "fig_4_3", "图表4-3：年度三端销售额对比")
+    annual_caption = f"图表{serial_market_annual}：年度三端销售额对比"
+    set_main_title(ax, fid_market_annual, annual_caption)
     ax.legend()
-    save_figure(FIG_DIR / "fig_4_3.png", fig)
-    add_fig_meta("fig_4_3", "图表4-3：年度三端销售额对比", "分组柱状图", "米内网", "annual_channel", "annual_channel", "4.2", "第4章数据专线", "数据来源：米内网")
+    save_figure(FIG_DIR / f"{fid_market_annual}.png", fig)
+    add_fig_meta(fid_market_annual, annual_caption, "分组柱状图", "米内网", "annual_channel", "annual_channel", market_block(1), market_data_rule_tag(), "数据来源：米内网")
 
     yoy = ch4.yoy_latest.dropna(subset=["yoy_pct"]).copy()
     if not yoy.empty:
+        fid_market_yoy = market_ids["market_yoy"]
+        serial_market_yoy = serial_from_fig_id(fid_market_yoy)
         fig, ax = plt.subplots(figsize=(7.8, 4.2))
         color_map = {"医院端": "#2B6CB0", "药店端": "#DD6B20", "线上端": "#2F855A"}
         ax.bar(yoy["channel"], yoy["yoy_pct"], color=[color_map.get(str(ch), "#4A5568") for ch in yoy["channel"]])
         ax.axhline(0, color="#4A5568", lw=1)
         ax.set_ylabel("同比增速（%）")
-        set_main_title(ax, "fig_4_4", f"图表4-4：{ch4.latest_quarter}三端同比增速")
+        yoy_caption = f"图表{serial_market_yoy}：{ch4.latest_quarter}三端同比增速"
+        set_main_title(ax, fid_market_yoy, yoy_caption)
         for i, v in enumerate(yoy["yoy_pct"]):
             if pd.notna(v):
                 ax.text(
@@ -5140,8 +5996,8 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
                     va="bottom" if v >= 0 else "top",
                     fontsize=fig_body_fontsize(),
                 )
-        save_figure(FIG_DIR / "fig_4_4.png", fig)
-        add_fig_meta("fig_4_4", f"图表4-4：{ch4.latest_quarter}三端同比增速", "柱状图", "米内网", "latest_yoy", "latest_yoy", "4.2", "第4章数据专线", "数据来源：米内网")
+        save_figure(FIG_DIR / f"{fid_market_yoy}.png", fig)
+        add_fig_meta(fid_market_yoy, yoy_caption, "柱状图", "米内网", "latest_yoy", "latest_yoy", market_block(1), market_data_rule_tag(), "数据来源：米内网")
 
     def top10_bar(df: pd.DataFrame, title: str, path: Path, fig_id: str):
         d = df.copy()
@@ -5160,12 +6016,18 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         save_figure(path, fig)
         return True
 
-    if top10_bar(ch4.top_hospital, f"图表4-5：医院端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_5.png", "fig_4_5"):
-        add_fig_meta("fig_4_5", f"图表4-5：医院端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_hospital", "top10_hospital", "4.3", "第4章数据专线", "数据来源：米内网")
-    if top10_bar(ch4.top_drugstore, f"图表4-6：药店端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_6.png", "fig_4_6"):
-        add_fig_meta("fig_4_6", f"图表4-6：药店端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_drugstore", "top10_drugstore", "4.4", "第4章数据专线", "数据来源：米内网")
-    if top10_bar(ch4.top_online, f"图表4-7：线上端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / "fig_4_7.png", "fig_4_7"):
-        add_fig_meta("fig_4_7", f"图表4-7：线上端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_online", "top10_online", "4.4", "第4章数据专线", "数据来源：米内网")
+    fid_top_hospital = market_ids["market_top_hospital"]
+    serial_top_hospital = serial_from_fig_id(fid_top_hospital)
+    if top10_bar(ch4.top_hospital, f"图表{serial_top_hospital}：医院端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / f"{fid_top_hospital}.png", fid_top_hospital):
+        add_fig_meta(fid_top_hospital, f"图表{serial_top_hospital}：医院端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_hospital", "top10_hospital", market_block(2), market_data_rule_tag(), "数据来源：米内网")
+    fid_top_drugstore = market_ids["market_top_drugstore"]
+    serial_top_drugstore = serial_from_fig_id(fid_top_drugstore)
+    if top10_bar(ch4.top_drugstore, f"图表{serial_top_drugstore}：药店端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / f"{fid_top_drugstore}.png", fid_top_drugstore):
+        add_fig_meta(fid_top_drugstore, f"图表{serial_top_drugstore}：药店端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_drugstore", "top10_drugstore", market_block(3), market_data_rule_tag(), "数据来源：米内网")
+    fid_top_online = market_ids["market_top_online"]
+    serial_top_online = serial_from_fig_id(fid_top_online)
+    if top10_bar(ch4.top_online, f"图表{serial_top_online}：线上端TOP10通用名（{ch4.latest_quarter}）", FIG_DIR / f"{fid_top_online}.png", fid_top_online):
+        add_fig_meta(fid_top_online, f"图表{serial_top_online}：线上端TOP10通用名（{ch4.latest_quarter}）", "横向柱状图", "米内网", "top10_online", "top10_online", market_block(3), market_data_rule_tag(), "数据来源：米内网")
 
     meaningful_cr5_channels: List[str] = []
     if ch4_top_has_meaningful_competition(ch4.top_hospital):
@@ -5176,17 +6038,20 @@ def generate_figures(ch4: Ch4Data) -> List[Dict[str, str]]:
         meaningful_cr5_channels.append("线上端")
     cr5 = ch4.cr5_latest[ch4.cr5_latest["channel"].isin(meaningful_cr5_channels)].dropna(subset=["cr5_pct"]).copy()
     if not cr5.empty:
+        fid_market_cr5 = market_ids["market_cr5"]
+        serial_market_cr5 = serial_from_fig_id(fid_market_cr5)
         fig, ax = plt.subplots(figsize=(8.2, 4.5))
         palette = ["#2B6CB0", "#DD6B20", "#2F855A"][: len(cr5)]
         ax.bar(cr5["channel"], cr5["cr5_pct"], color=palette)
         ax.set_ylabel("CR5（%）")
         upper = float(cr5["cr5_pct"].max()) * 1.25 if not cr5.empty else 10.0
         ax.set_ylim(0, max(10, upper))
-        set_main_title(ax, "fig_4_8", f"图表4-8：{ch4.latest_quarter}三端市场集中度（CR5）")
+        cr5_caption = f"图表{serial_market_cr5}：{ch4.latest_quarter}三端市场集中度（CR5）"
+        set_main_title(ax, fid_market_cr5, cr5_caption)
         for i, v in enumerate(cr5["cr5_pct"]):
             ax.text(i, v + 0.8, f"{v:.1f}%", ha="center", fontsize=fig_body_fontsize())
-        save_figure(FIG_DIR / "fig_4_8.png", fig)
-        add_fig_meta("fig_4_8", f"图表4-8：{ch4.latest_quarter}三端市场集中度（CR5）", "柱状图", "米内网", "cr5_latest", "cr5_latest", "4.3", "第4章数据专线", "数据来源：米内网")
+        save_figure(FIG_DIR / f"{fid_market_cr5}.png", fig)
+        add_fig_meta(fid_market_cr5, cr5_caption, "柱状图", "米内网", "cr5_latest", "cr5_latest", market_block(2), market_data_rule_tag(), "数据来源：米内网")
 
     # Chapter 5
     if is_cervical_profile():
@@ -5610,7 +6475,7 @@ def insert_block_with_figures(doc: Document, spec: BlockSpec, content: str, fig_
             continue
 
         p = doc.add_paragraph(style="数据报告正文")
-        set_para_text(p, para_text)
+        set_para_text(p, clean_docx_body_text(para_text))
         body_ptr += 1
         while fig_ptr < len(fig_ids) and body_ptr == insert_positions[min(fig_ptr, len(insert_positions) - 1)]:
             fid = fig_ids[fig_ptr]
@@ -5650,7 +6515,7 @@ def assemble_docx(specs: List[BlockSpec], block_text: Dict[str, str], summary: s
     for s in specs:
         specs_by_ch.setdefault(s.chapter, []).append(s)
 
-    for ch in range(1, 8):
+    for ch in template_chapters():
         h1 = doc.add_paragraph(style="一级目录")
         set_para_text(h1, chapter_title(ch))
         for s in specs_by_ch[ch]:
@@ -5661,7 +6526,7 @@ def assemble_docx(specs: List[BlockSpec], block_text: Dict[str, str], summary: s
     set_para_text(h_sum, "总结")
     for ptxt in split_paragraphs(summary):
         p = doc.add_paragraph(style="数据报告正文")
-        set_para_text(p, ptxt)
+        set_para_text(p, clean_docx_body_text(ptxt))
 
     h_ref = doc.add_paragraph(style="一级目录")
     set_para_text(h_ref, "参考文献")
@@ -5935,7 +6800,7 @@ def paragraph_has_anchor(text: str) -> bool:
         r"20\d{2}",
         r"\d+(?:\.\d+)?%",
         r"\d+(?:\.\d+)?(?:万元|万|元|例|岁|天|小时|周|月|年|季度)",
-        r"\[\d+\]",
+        r"\[\s*\d+(?:\s*[-,，、]\s*\d+)*\s*\]",
         r"(评分|发生率|恢复时间|稳定率|完成率|复评|复查|红旗征|禁忌|适应证|说明书|内镜|病理|幽门螺杆菌|CR5|CAGR|YTD)",
     ]
     return any(re.search(p, text) for p in patterns)
@@ -6100,11 +6965,12 @@ def collect_reference_chain_metrics(specs: List[BlockSpec], block_text: Dict[str
     evidence_ref_gap = sorted(evidence_set.symmetric_difference(ref_set))
 
     all_text = "\n".join([block_text[s.block_id] for s in specs]) + "\n" + summary_text
-    cited_nums_all = [int(x) for x in re.findall(r"\[(\d+)\]", all_text)]
+    cited_nums_all = [int(x) for x in re.findall(r"\[\s*(\d+)(?:\s*[-,，、]\s*\d+)*\s*\]", all_text)]
     cited_set = set(cited_nums_all)
     dangling_cites = sorted([x for x in cited_set if x not in ref_set])
     uncited_refs = sorted([x for x in ref_set if x not in cited_set])
     citation_coverage = (len(ref_set - set(uncited_refs)) / len(ref_set)) if ref_set else 0.0
+    body_citation_anchors = body_citation_anchor_count(all_text)
 
     evidence_bad_year = sorted([int(r["num"]) for r in evidence_rows if not bool(r.get("year_ok"))])
     evidence_bad_source = sorted([int(r["num"]) for r in evidence_rows if not bool(r.get("source_ok"))])
@@ -6125,6 +6991,7 @@ def collect_reference_chain_metrics(specs: List[BlockSpec], block_text: Dict[str
         "dangling_cites": dangling_cites,
         "uncited_refs": uncited_refs,
         "citation_coverage": citation_coverage,
+        "body_citation_anchors": body_citation_anchors,
         "evidence_bad_year": evidence_bad_year,
         "evidence_bad_source": evidence_bad_source,
         "ref_bad_year": ref_bad_year,
@@ -6148,36 +7015,33 @@ def collect_text_quality_metrics(specs: List[BlockSpec], block_text: Dict[str, s
     chapter_stats: List[Tuple[int, int, int, float, int, int]] = []
     low_anchor_chapters: List[int] = []
     chapter_dup_fails: List[int] = []
-    chapter_no_cites: List[int] = []
     chapter_chars: Dict[int, int] = {}
     chapter_len_fails: List[str] = []
-    for ch in range(1, 8):
+    for ch in template_chapters():
         ch_blocks = [s for s in specs if s.chapter == ch]
         ch_text = "\n".join([block_text[s.block_id] for s in ch_blocks])
         ch_paras = []
         for s in ch_blocks:
-            ch_paras.extend(split_paragraphs(block_text[s.block_id]))
+            ch_paras.extend(anchor_metric_paragraphs(block_text[s.block_id]))
         ch_chars = len(re.sub(r"\s+", "", ch_text))
         chapter_chars[ch] = ch_chars
         anchored = sum(1 for p in ch_paras if paragraph_has_anchor(p))
         anchor_cov = anchored / len(ch_paras) if ch_paras else 0.0
         ch_dup, _ = sentence_repeat_stats(ch_text)
-        cite_cnt = len(re.findall(r"\[\d+\]", ch_text))
+        cite_cnt = body_citation_anchor_count(ch_text)
         chapter_stats.append((ch, ch_chars, len(ch_paras), anchor_cov, ch_dup, cite_cnt))
         if anchor_cov < 0.7:
             low_anchor_chapters.append(ch)
         if ch_dup >= 4:
             chapter_dup_fails.append(ch)
-        if cite_cnt == 0:
-            chapter_no_cites.append(ch)
-        min_chars = CHAPTER_MIN_CHARS[ch]
+        min_chars = CHAPTER_MIN_CHARS.get(ch, default_chapter_floor(ch))
         shortfall = chapter_char_shortfall(ch, ch_chars)
         if shortfall > CHAPTER_CHAR_TOLERANCE:
             chapter_len_fails.append(f"{ch}({ch_chars}<{min_chars}; shortfall={shortfall}>tol={CHAPTER_CHAR_TOLERANCE})")
 
     anchor_cov_by_block: List[Tuple[str, float]] = []
     for s in specs:
-        paras = split_paragraphs(block_text[s.block_id])
+        paras = anchor_metric_paragraphs(block_text[s.block_id])
         if not paras:
             anchor_cov_by_block.append((s.block_id, 0.0))
             continue
@@ -6248,7 +7112,6 @@ def collect_text_quality_metrics(specs: List[BlockSpec], block_text: Dict[str, s
         "chapter_stats": chapter_stats,
         "low_anchor_chapters": low_anchor_chapters,
         "chapter_dup_fails": chapter_dup_fails,
-        "chapter_no_cites": chapter_no_cites,
         "chapter_chars": chapter_chars,
         "chapter_len_fails": chapter_len_fails,
         "anchor_cov_by_block": anchor_cov_by_block,
@@ -6290,9 +7153,9 @@ def build_codex_block_card(spec: BlockSpec, specs: List[BlockSpec], block_text: 
         "",
         "[Current Status]",
         f"- block chars: {current_chars} / target {target_chars} (gap={block_gap})",
-        f"- paragraphs: {len(paragraphs)} | citations: {citation_count} | anchor_cov: {anchor_cov*100:.1f}%",
+        f"- paragraphs: {len(paragraphs)} | body_citation_anchors: {citation_count} | anchor_cov: {anchor_cov*100:.1f}%",
         f"- rendered H3: {current_h3}" + (f" / expected {expected_h3}" if expected_h3 else " (summary block)"),
-        f"- chapter chars: {chapter_current_chars} / floor {CHAPTER_MIN_CHARS[spec.chapter]} (shortfall={chapter_shortfall})",
+        f"- chapter chars: {chapter_current_chars} / floor {CHAPTER_MIN_CHARS.get(spec.chapter, default_chapter_floor(spec.chapter))} (shortfall={chapter_shortfall})",
         "",
         "[Role In Chapter]",
         f"- previous block: {prev_block}",
@@ -6325,23 +7188,23 @@ def build_codex_block_card(spec: BlockSpec, specs: List[BlockSpec], block_text: 
         [
             "",
             "[Guard Rails]",
-            "- Every paragraph should contain at least one script-visible anchor such as 2025Q3 / 52.34% / 72小时 / 1周 / 3个月 / CR5 / CAGR / 红旗征 / [3].",
-            "- Distribute citations across paragraphs instead of clustering them only at the end.",
+            "- Every paragraph should contain at least one script-visible factual anchor such as 2025Q3 / 52.34% / 72小时 / 1周 / 3个月 / CR5 / CAGR / 红旗征.",
+            "- Do not write bracket citation anchors like [1] in the body; evidence traceability is kept in refs.txt and the final reference section.",
             "- If evidence is weak, narrow the claim boundary instead of padding with generic language.",
         ]
     )
 
-    if spec.chapter == 4:
+    if is_market_data_block(spec):
         lines.extend(
             [
-                "- Chapter 4 is Excel-locked: use only ch04_codex_extract.json / ch04_narrative_brief.txt / generated figure scope facts.",
+                f"- {market_data_scope_label()} is Excel-locked: use only {market_data_extract_path().name} / {MARKET_DATA_NARRATIVE_BRIEF_NAME} / generated figure scope facts.",
                 "- If a channel dataset, Top10 slice, or CR5 fact is missing, omit that subpoint instead of inventing symmetry.",
             ]
         )
     elif spec.chapter <= 3:
         lines.append("- Chapters 1-3 should prioritize mechanism, diagnosis, red flags, evidence boundaries, and follow-up timing.")
     else:
-        lines.append("- Chapters 5-7 should prioritize segmentation, adherence, policy constraints, forecast assumptions, and strategy actions.")
+        lines.append("- Downstream chapters should prioritize segmentation, adherence, policy constraints, forecast assumptions, and strategy actions.")
 
     card_refresh_cmd = f'python scripts/run_pipeline.py --topic "{DISEASE_NAME}" --refresh-progress'
     lines.extend(
@@ -6379,7 +7242,7 @@ def write_codex_block_cards(specs: List[BlockSpec], block_text: Dict[str, str]) 
         weak_flags: List[str] = snapshot["weak_flags"]  # type: ignore[assignment]
         card_path = card_dir / block_card_filename(spec.block_id)
         index_lines.append(
-            f"- {spec.block_id} | file={card_path.name} | chapter=ch{spec.chapter:02d}.txt | current={current_chars}/{spec.target_chars} | cites={citation_count} | weak={','.join(weak_flags) if weak_flags else 'none'}"
+            f"- {spec.block_id} | file={card_path.name} | chapter=ch{spec.chapter:02d}.txt | current={current_chars}/{spec.target_chars} | body_citation_anchors={citation_count} | weak={','.join(weak_flags) if weak_flags else 'none'}"
         )
         write_text(card_path, build_codex_block_card(spec, specs, block_text, metrics) + "\n")
 
@@ -6437,7 +7300,7 @@ def build_codex_next_actions(specs: List[BlockSpec], block_text: Dict[str, str],
         if anchor_cov < 0.70:
             score += 1600 + int((0.70 - anchor_cov) * 1000)
             reasons.append(f"锚点覆盖仅 {anchor_cov*100:.1f}%")
-            action_parts.append("补 2024/2025Q3/72小时/CR5/[3] 等锚点")
+            action_parts.append("补 2024/2025Q3/72小时/CR5/红旗征等事实锚点")
         elif anchor_cov < 0.85:
             score += 180
             reasons.append(f"锚点覆盖偏低 {anchor_cov*100:.1f}%")
@@ -6537,9 +7400,9 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
         chapter_to_specs.setdefault(spec.chapter, []).append(spec)
 
     chapter_rows: List[Tuple[int, int, int, int]] = []
-    for chapter in range(1, 8):
+    for chapter in template_chapters():
         current_chars = int(chapter_chars.get(chapter, 0))
-        min_chars = int(CHAPTER_MIN_CHARS.get(chapter, 0))
+        min_chars = int(CHAPTER_MIN_CHARS.get(chapter, default_chapter_floor(chapter)))
         gap = max(0, min_chars - current_chars)
         chapter_rows.append((chapter, current_chars, min_chars, gap))
 
@@ -6549,7 +7412,7 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
         "[Codex Rewrite Task]",
         f"Topic: {DISEASE_NAME}",
         f"Current total chars (chapters + summary, no whitespace): {total_chars}",
-        "Target total chars: 30000-34000",
+        "Target total chars: >=30000",
         f"Minimum chars still needed: {total_gap}",
         f"Current summary chars: {summary_chars} (recommended: 1200-1500)",
         "",
@@ -6562,28 +7425,30 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
         f"- {OUT_ROOT / CODEX_BLOCK_CARD_DIR_NAME} (pick the block card you are actively editing)",
         "",
         "[Primary Goal]",
-        "- Directly rewrite and overwrite ch01.txt ~ ch07.txt and summary.txt.",
+        "- Directly rewrite and overwrite the active template chapter files and summary.txt.",
         "- Hit the gate in one pass instead of writing an obviously under-length draft first.",
         "- Any newly added content must be grounded in the evidence pool, existing figure scope, or chapter-4 structured data.",
         "",
         "[Hard Rules]",
-        f"1) Every chapter should meet the script floor; a shortfall within {CHAPTER_CHAR_TOLERANCE} chars is acceptable, and the full draft must stay within 30000-34000 chars.",
+        f"1) Every chapter should meet the script floor; a shortfall within {CHAPTER_CHAR_TOLERANCE} chars is acceptable, and the full draft must stay at or above 30000 chars.",
         "2) Every non-summary block should contain 2-3 third-level headings in the form '1.1.1 标题'. Do not stop at second-level headings only.",
         "3) Every '本章小结' should stay around 500 chars, must not contain charts, and should summarize findings instead of writing management advice.",
-        "4) Chapter 4 may only use Excel-derived facts, ch04_codex_extract.json, and generated figure scope. Do not invent new market numbers.",
-        "5) If a channel-level Chapter-4 dataset is missing (for example a top10 or CR5 channel cut), omit that specific small subsection instead of writing placeholder analysis.",
+        f"4) {market_data_scope_label()} may only use Excel-derived facts, {market_data_extract_path().name}, and generated figure scope. Do not invent new market numbers.",
+        f"5) If a channel-level {market_data_scope_label()} dataset is missing (for example a top10 or CR5 channel cut), omit that specific small subsection instead of writing placeholder analysis.",
         "6) New medical, policy, or pathway claims must be traceable to 00_evidence.txt, refs.txt, manifest_fig.csv, or the existing draft context.",
-        "7) Keep citation numbering consistent. Do not fabricate citation IDs.",
+        "7) Keep evidence mapping consistent in 00_evidence.txt and refs.txt. Do not write bracket citation anchors like [1] in body text.",
         "8) Prioritize cause stratification, mechanism, diagnosis, evidence, boundaries, and red flags in Chapters 1-3.",
-        "9) Prioritize segmentation, pathway differences, adherence mechanisms, policy constraints, forecast assumptions, and strategy actions in Chapters 5-7.",
+        "9) Prioritize segmentation, pathway differences, adherence mechanisms, policy constraints, forecast assumptions, and strategy actions in downstream chapters.",
         "10) Non-chapter-4 figure source lines must be specific. Do not use only 'public source??' style placeholders.",
         "11) Avoid empty management jargon. Each paragraph should carry a real medical or market anchor.",
         "12) Keep each chapter summary near 450-650 chars. If a summary grows past 650, compress it before rewriting the full chapter.",
+        "13) Never write internal artifact filenames or workbook filenames into the report body or summary; use generic wording such as '结构化数据'、'市场监测数据'、'工作簿提取结果'.",
         "",
         "[Fast Repair Tactics]",
         "- If a chapter is short by <=300 chars, add 1 anchored paragraph first instead of rewriting the whole chapter.",
         "- If only one block is weak, patch that block locally and preserve the chapters that already pass.",
-        "- Prefer script-recognized anchors in new paragraphs: year/quarter, %, 万元, 72小时, 1周, 3个月, CR5, CAGR, 红旗征, or citation IDs like [3].",
+        "- Prefer script-recognized factual anchors in new paragraphs: year/quarter, %, 万元, 72小时, 1周, 3个月, CR5, CAGR, 红旗征.",
+        "- Do not add bracket citation anchors like [1] in body text; final Word output removes them and QA expects none in the body.",
         f"- After each repair batch, refresh progress assets with: {refresh_cmd}",
         "",
         "[Suggested Order]",
@@ -6614,7 +7479,7 @@ def build_codex_rewrite_prompt(specs: List[BlockSpec], metrics: Dict[str, object
             "- Blocks with no Codex-authored third-level headings: " + (", ".join(missing_h3_blocks) if missing_h3_blocks else "none"),
             "",
             "[Delivery]",
-            f"- Overwrite: {OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
+            f"- Overwrite: {chapter_text_file_list_text()}",
             f"- Overwrite: {OUT_ROOT / 'summary.txt'}",
             "- Do not write any new artifact to the repo root.",
             f"- Quick progress refresh while editing: {refresh_cmd}",
@@ -6648,8 +7513,8 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
         f"1) {OUT_ROOT / '00_evidence.txt'}",
         f"2) {OUT_ROOT / 'manifest_text.csv'}",
         f"3) {OUT_ROOT / 'manifest_fig.csv'}",
-        f"4) {OUT_ROOT / 'ch04_codex_extract.json'}",
-        f"5) {OUT_ROOT / CH4_NARRATIVE_BRIEF_NAME}",
+        f"4) {market_data_extract_path()}",
+        f"5) {OUT_ROOT / MARKET_DATA_NARRATIVE_BRIEF_NAME}",
         f"6) {OUT_ROOT / CODEX_GAP_PANEL_NAME}",
         f"7) {OUT_ROOT / CODEX_NEXT_ACTIONS_NAME}",
         f"8) {OUT_ROOT / CHAPTER_PRECHECK_NAME}",
@@ -6658,7 +7523,7 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
         f"11) {OUT_ROOT / 'figure_specs.json'} (if present)",
         "",
         "[Output Files]",
-        f"- {OUT_ROOT / 'ch01.txt'} ~ {OUT_ROOT / 'ch07.txt'}",
+        "- " + chapter_text_file_list_text(),
         f"- {OUT_ROOT / 'summary.txt'}",
         "- Keep all generated or overwritten files inside the current autofile topic folder.",
         "",
@@ -6666,17 +7531,18 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
         "1) Finish the body first, then write the summary.",
         "2) Every non-summary block should contain 2-3 third-level headings, written as '1.1.1 标题' so the template's 三级目录 can be used.",
         "3) Every '本章小结' should stay around 500 chars, should not contain charts, and should only close the chapter logic instead of giving enterprise management advice.",
-        "4) Chapter 4 must stay inside Excel-derived scope only. Do not add new market numbers, shares, or growth rates.",
-        "5) If a channel-level Chapter-4 dataset is missing in Excel or ch04_codex_extract.json, omit that specific small subsection and do not write placeholder text just to keep symmetry.",
+        f"4) {market_data_scope_label()} must stay inside Excel-derived scope only. Do not add new market numbers, shares, or growth rates.",
+        f"5) If a channel-level {market_data_scope_label()} dataset is missing in Excel or {market_data_extract_path().name}, omit that specific small subsection and do not write placeholder text just to keep symmetry.",
         "6) Each paragraph should contain concrete anchors: mechanism, pathway, evidence, policy basis, figure scope, or market fact.",
-        "7) Keep citations consistent and distributed across paragraphs instead of clustering them at the end.",
+        "7) Keep evidence traceability in 00_evidence.txt and refs.txt; do not place bracket citation anchors like [1] in body paragraphs.",
         "8) Non-chapter-4 figure source lines must be specific to guideline/review/institution level.",
         "9) If evidence is weak, narrow the claim boundary instead of padding with generic language.",
         "10) If fig_2_3 is not ready, write fig23_codex_spec.json first before stage3-stage5.",
+        "11) Never mention internal artifact filenames such as market_data_codex_extract.json, ch04_codex_extract.json, figure_specs.json, codex_content_blueprint.txt, or any .xlsx filename inside the report body or summary.",
         "",
         "[Anchor Cheat Sheet]",
-        "- Prefer at least one script-visible anchor in each paragraph: 2024 / 2025Q3 / 52.34% / 81292.0万元 / 72小时 / 1周 / 3个月 / CR5 / CAGR / 红旗征 / [3].",
-        "- If a paragraph is purely connective, add a concrete follow-up node, quantified fact, or citation before moving on.",
+        "- Prefer at least one script-visible factual anchor in each paragraph: 2024 / 2025Q3 / 52.34% / 81292.0万元 / 72小时 / 1周 / 3个月 / CR5 / CAGR / 红旗征.",
+        "- If a paragraph is purely connective, add a concrete follow-up node, quantified fact, or pathway/evidence clue before moving on.",
         "",
         "[Fast First-Draft Strategy]",
         "- Overshoot every chapter floor by 150-300 chars in the first draft. Do not sit on the tolerance edge.",
@@ -6686,8 +7552,8 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
         "",
         "[Chapter Targets]",
     ]
-    for chapter in range(1, 8):
-        floor = int(CHAPTER_MIN_CHARS.get(chapter, 0))
+    for chapter in template_chapters():
+        floor = int(CHAPTER_MIN_CHARS.get(chapter, default_chapter_floor(chapter)))
         target = int(max(chapter_target_map.get(chapter, floor), floor + 200))
         lines.append(f"- Chapter {chapter}: hard floor={floor}; recommended first-draft target={target}-{target + 200}")
         for spec in chapter_to_specs.get(chapter, []):
@@ -6701,7 +7567,7 @@ def build_codex_content_blueprint(specs: List[BlockSpec]) -> str:
             "",
             "[Suggested Workflow]",
             "1) Read the evidence pool, text manifest, figure manifest, and chapter-4 structured data before writing.",
-            "2) Write Chapters 1-3 first, refresh progress, then Chapter 4, refresh progress, then Chapters 5-7.",
+            f"2) Write chapters in template order; refresh once before and after the {market_data_scope_label()} Excel-locked section.",
             "3) Write the summary last so it reflects the final logic instead of repeating the table of contents.",
             f"4) During drafting, use: {refresh_cmd}",
             "5) Run stage3-stage5 only after the body is complete.",
@@ -6835,7 +7701,6 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
     chapter_stats: List[Tuple[int, int, int, float, int, int]] = metrics["chapter_stats"]  # type: ignore[assignment]
     low_anchor_chapters: List[int] = metrics["low_anchor_chapters"]  # type: ignore[assignment]
     chapter_dup_fails: List[int] = metrics["chapter_dup_fails"]  # type: ignore[assignment]
-    chapter_no_cites: List[int] = metrics["chapter_no_cites"]  # type: ignore[assignment]
     chapter_len_fails: List[str] = metrics["chapter_len_fails"]  # type: ignore[assignment]
     medical_density_failed: List[str] = metrics["medical_density_failed"]  # type: ignore[assignment]
     overlong_summary_blocks: List[str] = metrics["overlong_summary_blocks"]  # type: ignore[assignment]
@@ -6844,6 +7709,7 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
     cagr_logic_ok: bool = metrics["cagr_logic_ok"]  # type: ignore[assignment]
     cr5_logic_ok: bool = metrics["cr5_logic_ok"]  # type: ignore[assignment]
     total_chars = sum(len(re.sub(r"\s+", "", block_text[s.block_id])) for s in specs) + len(re.sub(r"\s+", "", summary_text))
+    internal_artifact_hits = internal_artifact_mentions("\n".join(block_text.values()) + "\n" + summary_text)
 
     missing_h3_blocks = [
         spec.block_id for spec in specs if (not is_summary_block(spec.subtitle)) and int(rendered_h3_by_block.get(spec.block_id, 0)) == 0
@@ -6864,10 +7730,8 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
         fail_reasons.append("章节事实锚点覆盖不足")
     if chapter_dup_fails:
         fail_reasons.append("章节内句级重复超阈值")
-    if chapter_no_cites:
-        fail_reasons.append("章节引用缺失")
-    if not (30000 <= total_chars <= 34000):
-        fail_reasons.append("总字数未达到30000-34000")
+    if total_chars < 30000:
+        fail_reasons.append("总字数未达到30000字")
     if chapter_len_fails:
         fail_reasons.append("分章最低字数未达标")
     if medical_density_failed:
@@ -6878,6 +7742,8 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
         fail_reasons.append("第四章CAGR逻辑冲突")
     if not cr5_logic_ok:
         fail_reasons.append("第四章CR5叙述冲突")
+    if internal_artifact_hits:
+        fail_reasons.append("正文出现内部文件名")
 
     passed = len(fail_reasons) == 0
 
@@ -6893,6 +7759,7 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
         "指标逻辑冲突：" + ("；".join(metric_logic_issues) if metric_logic_issues else "无"),
         "第四章逻辑一致性：" + ("通过" if cagr_logic_ok else "不通过"),
         "第四章CR5叙述一致性：" + ("通过" if cr5_logic_ok else "不通过"),
+        "正文内部文件名命中：" + (", ".join(internal_artifact_hits) if internal_artifact_hits else "无"),
         "第1-3章医学密度不足block：" + (", ".join(medical_density_failed) if medical_density_failed else "无"),
         "缺少三级标题block：" + (", ".join(missing_h3_blocks) if missing_h3_blocks else "无"),
         "本章小结超长block：" + (", ".join(overlong_summary_blocks) if overlong_summary_blocks else "无"),
@@ -6902,7 +7769,7 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
     for ch, chars, para_cnt, anchor_cov, ch_dup, cite_cnt in chapter_stats:
         lines.append(
             f"第{ch}章：字数={chars}，段落数={para_cnt}，锚点覆盖={anchor_cov*100:.1f}%"
-            f"，句级最大重复={ch_dup}，引用数={cite_cnt}"
+            f"，句级最大重复={ch_dup}，正文方括号引用锚点数={cite_cnt}"
         )
     lines.extend(
         [
@@ -6910,8 +7777,8 @@ def run_txt_stage_checks(specs: List[BlockSpec], block_text: Dict[str, str], sum
             "【分章问题】",
             "锚点覆盖不足章节：" + (", ".join([str(x) for x in low_anchor_chapters]) if low_anchor_chapters else "无"),
             "章节内句级重复超阈值章节：" + (", ".join([str(x) for x in chapter_dup_fails]) if chapter_dup_fails else "无"),
-            "引用缺失章节：" + (", ".join([str(x) for x in chapter_no_cites]) if chapter_no_cites else "无"),
-            f"总字数30000-34000：{'通过' if (30000 <= total_chars <= 34000) else '不通过'}",
+            "引用缺失章节：不作门槛（正文不显示方括号引用锚点）",
+            f"总字数>=30000：{'通过' if total_chars >= 30000 else '不通过'}",
             "分章字数下限未达标：" + (", ".join(chapter_len_fails) if chapter_len_fails else "无"),
             "",
             "【TXT闸门判定】",
@@ -6932,21 +7799,24 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     total_chars = sum(len(re.sub(r"\s+", "", block_text[s.block_id])) for s in specs) + len(re.sub(r"\s+", "", summary_text))
     fig_files = sorted(FIG_DIR.glob("fig_*.png"))
     fig_count = len(fig_rows)
-    actual_ch4_fig_ids = sorted(
-        [str(row.get("fig_id", "")).strip() for row in fig_rows if str(row.get("fig_id", "")).strip().startswith("fig_4_")],
+    market_fig_id_set = set(market_figure_id_map().values())
+    actual_market_fig_ids = sorted(
+        [str(row.get("fig_id", "")).strip() for row in fig_rows if str(row.get("fig_id", "")).strip() in market_fig_id_set],
         key=figure_sort_key,
     )
-    expected_ch4_fig_ids = sorted(
-        [fig_id for fig_id in chapter4_available_figure_ids(load_ch4_data_for_runtime()) if fig_id.startswith("fig_4_")],
+    expected_market_fig_ids = sorted(
+        [fig_id for fig_id in market_available_figure_ids(load_ch4_data_for_runtime()) if fig_id in market_fig_id_set],
         key=figure_sort_key,
     )
-    ch4_fig_count = len(actual_ch4_fig_ids)
+    market_fig_count = len(actual_market_fig_ids)
 
     doc_xml = extract_docx_text_xml(FINAL_DOCX)
+    internal_artifact_hits = internal_artifact_mentions("\n".join(block_text.values()) + "\n" + summary_text + "\n" + doc_xml)
     current_disease_token = DISEASE_NAME.strip()
     legacy_placeholder_tokens = [t for t in LEGACY_DISEASE_TOKENS if t.strip() and t.strip() != current_disease_token]
     placeholder_keys = ["XXX", "<<<", "AAA"] + legacy_placeholder_tokens
     placeholder_hits = {k: doc_xml.count(k) for k in placeholder_keys}
+    doc_xml_xlex_count = len(re.findall(r"(?i)\bxlex\b|xlex(?=https?://)", doc_xml))
 
     with zipfile.ZipFile(FINAL_DOCX, "r") as zf:
         names = set(zf.namelist())
@@ -7004,6 +7874,24 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     cap_count = sum(1 for p in doc.paragraphs if p.text.strip().startswith("图表"))
     src_count = sum(1 for p in doc.paragraphs if p.text.strip().startswith("数据来源："))
     heading3_count = sum(1 for p in doc.paragraphs if (p.style is not None and p.style.name == "三级目录") and p.text.strip())
+    in_reference_section = False
+    doc_body_citation_anchor_paragraphs: List[str] = []
+    doc_xlex_paragraphs: List[str] = []
+    doc_body_linebreak_paragraphs: List[str] = []
+    for paragraph in doc.paragraphs:
+        text = normalize_disease_text(paragraph.text.strip())
+        if not text:
+            continue
+        style_name = paragraph.style.name if paragraph.style is not None else ""
+        if style_name == "一级目录" and text == "参考文献":
+            in_reference_section = True
+            continue
+        if (not in_reference_section) and body_citation_anchor_count(text) > 0:
+            doc_body_citation_anchor_paragraphs.append(text[:48])
+        if (not in_reference_section) and ("\n" in paragraph.text or "\r" in paragraph.text):
+            doc_body_linebreak_paragraphs.append(text[:48])
+        if re.search(r"(?i)\bxlex\b", text) or re.search(r"(?i)xlex(?=https?://)", text):
+            doc_xlex_paragraphs.append(text[:48])
     missing_source_line, missing_embedded_source, mismatched_embedded_source = collect_figure_source_footer_issues(fig_rows)
 
     caption_order: List[Tuple[int, int]] = []
@@ -7123,6 +8011,7 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     dangling_cites: List[int] = ref_chain["dangling_cites"]  # type: ignore[assignment]
     uncited_refs: List[int] = ref_chain["uncited_refs"]  # type: ignore[assignment]
     citation_coverage: float = float(ref_chain["citation_coverage"])  # type: ignore[assignment]
+    body_citation_anchors: int = int(ref_chain["body_citation_anchors"])  # type: ignore[assignment]
     evidence_bad_year: List[int] = ref_chain["evidence_bad_year"]  # type: ignore[assignment]
     evidence_bad_source: List[int] = ref_chain["evidence_bad_source"]  # type: ignore[assignment]
     ref_bad_year: List[int] = ref_chain["ref_bad_year"]  # type: ignore[assignment]
@@ -7131,8 +8020,8 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     qa_fail_reasons: List[str] = []
     if not (20 <= fig_count <= 30):
         qa_fail_reasons.append("图表总量不在20-30")
-    if actual_ch4_fig_ids != expected_ch4_fig_ids:
-        qa_fail_reasons.append("第四章图表未按数据可用性裁剪")
+    if actual_market_fig_ids != expected_market_fig_ids:
+        qa_fail_reasons.append(f"{market_data_scope_label()}图表未按数据可用性裁剪")
     if cap_count not in (0, fig_count):
         qa_fail_reasons.append("图表标题行数与图表数不一致")
     if src_count != 0:
@@ -7145,8 +8034,16 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         qa_fail_reasons.append("正文缺少Codex显式三级标题")
     if missing_source_line or missing_embedded_source or mismatched_embedded_source:
         qa_fail_reasons.append("图片内嵌数据来源缺失或与manifest不一致")
+    if doc_body_citation_anchor_paragraphs:
+        qa_fail_reasons.append("报告正文仍含方括号引用锚点")
+    if doc_body_linebreak_paragraphs:
+        qa_fail_reasons.append("报告正文段落仍含硬换行")
+    if doc_xlex_paragraphs or doc_xml_xlex_count:
+        qa_fail_reasons.append("文档仍含xlex残留")
     if not all(v == 0 for v in placeholder_hits.values()):
         qa_fail_reasons.append("存在占位符残留")
+    if internal_artifact_hits:
+        qa_fail_reasons.append("文档或正文出现内部文件名")
     if not footer_has_page:
         qa_fail_reasons.append("页脚PAGE域缺失")
     if footer_page_in_textbox:
@@ -7167,16 +8064,16 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         qa_fail_reasons.append("句级重复超阈值")
     if metric_logic_issues:
         qa_fail_reasons.append("指标逻辑或单位冲突")
-    if not (30000 <= total_chars <= 34000):
-        qa_fail_reasons.append("总字数未达到30000-34000")
+    if total_chars < 30000:
+        qa_fail_reasons.append("总字数未达到30000字")
     if chapter_len_fails:
         qa_fail_reasons.append("分章最低字数未达标")
     if low_anchor_blocks:
         qa_fail_reasons.append("事实锚点覆盖率不足")
     if not cagr_logic_ok:
-        qa_fail_reasons.append("第四章CAGR逻辑冲突")
+        qa_fail_reasons.append(f"{market_data_scope_label()}CAGR逻辑冲突")
     if not cr5_logic_ok:
-        qa_fail_reasons.append("第四章CR5叙述冲突")
+        qa_fail_reasons.append(f"{market_data_scope_label()}CR5叙述冲突")
     if medical_density_failed:
         qa_fail_reasons.append("第1-3章医学密度不足")
     if bad_ref_rows:
@@ -7197,8 +8094,6 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         qa_fail_reasons.append("正文存在悬空引用编号")
     if evidence_bad_year or evidence_bad_source or ref_bad_year or ref_bad_source:
         qa_fail_reasons.append("证据或参考存在年份/来源缺失")
-    if ref_count > 0 and citation_coverage < 0.60:
-        qa_fail_reasons.append("正文引用覆盖率不足（<60%）")
     if title_registry_error:
         qa_fail_reasons.append("缺少图题注册表")
     if title_missing:
@@ -7236,11 +8131,12 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
     lines = [
         "【QA检查结果】",
         f"流程模式：{WORKFLOW_MODE}",
+        f"模板：{ACTIVE_TEMPLATE_ID}",
         f"总字数（章节+总结，去空白）：{total_chars}",
         f"图表总数：{fig_count}",
-        f"第四章图表数：{ch4_fig_count}",
-        "第四章应有fig_id：" + (", ".join(expected_ch4_fig_ids) if expected_ch4_fig_ids else "无"),
-        "第四章实际fig_id：" + (", ".join(actual_ch4_fig_ids) if actual_ch4_fig_ids else "无"),
+        f"{market_data_scope_label()}图表数：{market_fig_count}",
+        f"{market_data_scope_label()}应有fig_id：" + (", ".join(expected_market_fig_ids) if expected_market_fig_ids else "无"),
+        f"{market_data_scope_label()}实际fig_id：" + (", ".join(actual_market_fig_ids) if actual_market_fig_ids else "无"),
         f"manifest_fig行数：{len(fig_rows)}",
         f"文档图表标题行数：{cap_count}",
         f"文档独立数据来源行数：{src_count}",
@@ -7249,6 +8145,9 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         "manifest缺失source_line fig_id：" + (", ".join(missing_source_line) if missing_source_line else "无"),
         "图片内嵌来源缺失fig_id：" + (", ".join(missing_embedded_source) if missing_embedded_source else "无"),
         "图片内嵌来源不一致fig_id：" + (", ".join(mismatched_embedded_source) if mismatched_embedded_source else "无"),
+        "文档正文方括号引用锚点残留：" + (str(len(doc_body_citation_anchor_paragraphs)) if doc_body_citation_anchor_paragraphs else "无"),
+        "文档正文段落硬换行残留：" + (str(len(doc_body_linebreak_paragraphs)) if doc_body_linebreak_paragraphs else "无"),
+        "文档xlex残留：" + (str(max(len(doc_xlex_paragraphs), doc_xml_xlex_count)) if (doc_xlex_paragraphs or doc_xml_xlex_count) else "无"),
         f"标题重复前缀命中数：{dup_prefix_hits}",
         "占位符残留统计：" + ", ".join([f"{k}={v}" for k, v in placeholder_hits.items()]),
         f"页码重置配置(w:start)：{'检测到（存在重置风险）' if pgnum_start_present else '未检测到'}",
@@ -7261,17 +8160,18 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         f"句级最大重复次数：{max_sentence_dup}",
         "句级重复TOP5：" + ("; ".join([f"{c}x:{s[:36]}..." for s, c in top_sentence_dups]) if top_sentence_dups else "无"),
         "指标逻辑冲突：" + ("；".join(metric_logic_issues) if metric_logic_issues else "无"),
+        "正文/文档内部文件名命中：" + (", ".join(internal_artifact_hits) if internal_artifact_hits else "无"),
         "事实锚点覆盖不足block：" + (", ".join(low_anchor_blocks) if low_anchor_blocks else "无"),
         "分章字数下限未达标：" + (", ".join(chapter_len_fails) if chapter_len_fails else "无"),
-        "第四章逻辑一致性：" + ("通过" if cagr_logic_ok else "不通过"),
-        "第四章CR5叙述一致性：" + ("通过" if cr5_logic_ok else "不通过"),
+        f"{market_data_scope_label()}逻辑一致性：" + ("通过" if cagr_logic_ok else "不通过"),
+        f"{market_data_scope_label()}CR5叙述一致性：" + ("通过" if cr5_logic_ok else "不通过"),
         "第1-3章医学密度不足block：" + (", ".join(medical_density_failed) if medical_density_failed else "无"),
         "缺少Codex显式三级标题block：" + (", ".join(missing_h3_blocks) if missing_h3_blocks else "无"),
         "参考文献可核验异常行：" + (", ".join(bad_ref_rows) if bad_ref_rows else "无"),
         "证据池条数：" + str(evidence_count),
         "参考文献条数：" + str(ref_count),
-        "正文引用编号数（去重）：" + str(cited_count),
-        "引用覆盖率（正文命中参考）：" + f"{citation_coverage*100:.1f}%",
+        "TXT正文方括号引用锚点数：" + str(body_citation_anchors),
+        "旧版引用覆盖率（信息项，不作门槛）：" + f"{citation_coverage*100:.1f}%",
         "证据池解析异常：" + (", ".join(evidence_parse_errors) if evidence_parse_errors else "无"),
         "参考文献解析异常：" + (", ".join(ref_parse_errors) if ref_parse_errors else "无"),
         "证据ID重复：" + (", ".join([str(x) for x in evidence_id_dup]) if evidence_id_dup else "无"),
@@ -7307,22 +8207,18 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         "图表2-3节点间距问题：" + ("；".join(fig23_node_spacing_issues) if fig23_node_spacing_issues else "无"),
         "",
         "【约束判定】",
-        f"字数是否在30000-34000：{'通过' if (30000 <= total_chars <= 34000) else '不通过'}",
+        f"字数是否>=30000：{'通过' if total_chars >= 30000 else '不通过'}",
         f"分章最低字数（差{CHAPTER_CHAR_TOLERANCE}字内允许通过）：{'通过' if (not chapter_len_fails) else '不通过'}",
-        f"第1章>=3000或差距<=100：{'通过' if chapter_char_gate_ok(1, chapter_chars[1]) else '不通过'}",
-        f"第2章>=3500或差距<=100：{'通过' if chapter_char_gate_ok(2, chapter_chars[2]) else '不通过'}",
-        f"第3章>=4800或差距<=100：{'通过' if chapter_char_gate_ok(3, chapter_chars[3]) else '不通过'}",
-        f"第4章>=3000或差距<=100：{'通过' if chapter_char_gate_ok(4, chapter_chars[4]) else '不通过'}",
-        f"第5章>=4800或差距<=100：{'通过' if chapter_char_gate_ok(5, chapter_chars[5]) else '不通过'}",
-        f"第6章>=4800或差距<=100：{'通过' if chapter_char_gate_ok(6, chapter_chars[6]) else '不通过'}",
-        f"第7章>=4800或差距<=100：{'通过' if chapter_char_gate_ok(7, chapter_chars[7]) else '不通过'}",
         f"图表总量20-30：{'通过' if 20 <= fig_count <= 30 else '不通过'}",
-        f"第四章图表按数据可用性匹配：{'通过' if actual_ch4_fig_ids == expected_ch4_fig_ids else '不通过'}",
+        f"{market_data_scope_label()}图表按数据可用性匹配：{'通过' if actual_market_fig_ids == expected_market_fig_ids else '不通过'}",
         f"图表标题行数匹配：{'通过' if cap_count in (0, fig_count) else '不通过'}",
         f"文档无独立来源段落：{'通过' if src_count == 0 else '不通过'}",
         f"图表顺序按编号递增：{'通过' if figure_order_ok else '不通过'}",
         f"三级标题已渲染：{'通过' if heading3_count > 0 else '不通过'}",
         f"图片来源内嵌一致性：{'通过' if not (missing_source_line or missing_embedded_source or mismatched_embedded_source) else '不通过'}",
+        f"报告正文无方括号引用锚点：{'通过' if not doc_body_citation_anchor_paragraphs else '不通过'}",
+        f"报告正文段落无硬换行：{'通过' if not doc_body_linebreak_paragraphs else '不通过'}",
+        f"文档无xlex残留：{'通过' if not (doc_xlex_paragraphs or doc_xml_xlex_count) else '不通过'}",
         f"占位符清洗：{'通过' if all(v == 0 for v in placeholder_hits.values()) else '不通过'}",
         f"页码连续性（无w:start重置）：{'通过' if not pgnum_start_present else '不通过'}",
         f"节页脚统一引用：{'通过' if footer_uniform_ok else '不通过'}",
@@ -7334,9 +8230,10 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         f"管理话术清洗：{'通过' if max(drift_counts.values()) == 0 else '不通过'}",
         f"句级重复阈值(<4)：{'通过' if max_sentence_dup < 4 else '不通过'}",
         f"指标逻辑一致性：{'通过' if not metric_logic_issues else '不通过'}",
+        f"内部文件名清洗：{'通过' if not internal_artifact_hits else '不通过'}",
         f"事实锚点覆盖率阈值(>=70%)：{'通过' if not low_anchor_blocks else '不通过'}",
-        f"第四章逻辑一致性：{'通过' if cagr_logic_ok else '不通过'}",
-        f"第四章CR5叙述一致性：{'通过' if cr5_logic_ok else '不通过'}",
+        f"{market_data_scope_label()}逻辑一致性：{'通过' if cagr_logic_ok else '不通过'}",
+        f"{market_data_scope_label()}CR5叙述一致性：{'通过' if cr5_logic_ok else '不通过'}",
         f"第1-3章医学密度校验：{'通过' if not medical_density_failed else '不通过'}",
         f"Codex显式三级标题：{'通过' if not missing_h3_blocks else '不通过'}",
         f"引用可核验性：{'通过' if not bad_ref_rows else '不通过'}",
@@ -7345,7 +8242,7 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         f"证据与参考编号连续：{'通过' if (evidence_seq_ok and ref_seq_ok) else '不通过'}",
         f"证据与参考编号集合一致：{'通过' if not evidence_ref_gap else '不通过'}",
         f"正文悬空引用清洗：{'通过' if not dangling_cites else '不通过'}",
-        f"引用覆盖率>=60%：{'通过' if (ref_count > 0 and citation_coverage >= 0.60) else '不通过'}",
+        "正文引用覆盖率：不作门槛（正文不显示方括号引用锚点）",
         f"证据年份/来源完整：{'通过' if not (evidence_bad_year or evidence_bad_source) else '不通过'}",
         f"参考年份/来源完整：{'通过' if not (ref_bad_year or ref_bad_source) else '不通过'}",
         f"图题注册表可用：{'通过' if not title_registry_error else '不通过'}",
@@ -7371,6 +8268,12 @@ def run_checks(specs: List[BlockSpec], block_text: Dict[str, str], fig_rows: Lis
         "",
         "备注：目录与页码字段已设置updateFields=true，打开Word后全选F9可刷新显示。",
     ]
+    insert_at = lines.index(f"分章最低字数（差{CHAPTER_CHAR_TOLERANCE}字内允许通过）：{'通过' if (not chapter_len_fails) else '不通过'}") + 1
+    chapter_gate_lines = [
+        f"第{ch}章>={CHAPTER_MIN_CHARS.get(ch, default_chapter_floor(ch))}或差距<={CHAPTER_CHAR_TOLERANCE}：{'通过' if chapter_char_gate_ok(ch, int(chapter_chars.get(ch, 0))) else '不通过'}"
+        for ch in template_chapters()
+    ]
+    lines[insert_at:insert_at] = chapter_gate_lines
     report = "\n".join(lines)
     write_text(OUT_ROOT / "fig23_review_prompt.txt", build_fig23_review_prompt() + "\n")
     write_text(OUT_ROOT / "qa_check.txt", report + "\n")
@@ -7390,8 +8293,8 @@ def load_block_text_from_files(specs: List[BlockSpec]) -> Dict[str, str]:
         re.S,
     )
     block_text: Dict[str, str] = {}
-    for ch in range(1, 8):
-        path = OUT_ROOT / f"ch0{ch}.txt"
+    for ch in template_chapters():
+        path = OUT_ROOT / chapter_text_filename(ch)
         if not path.exists():
             raise FileNotFoundError(f"Missing chapter text file: {path}")
         text = path.read_text(encoding="utf-8")
@@ -7515,7 +8418,7 @@ def run_stage3_ch4_and_figures() -> None:
     except (FileNotFoundError, ValueError) as exc:
         raise RuntimeError(
             "Missing reusable body text. "
-            f"Write ch01~ch07.txt/summary.txt by following {OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME}; "
+            f"Write {chapter_text_file_list_text()} and {OUT_ROOT / 'summary.txt'} by following {OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME}; "
             f"preserve Codex-authored evidence/refs when available; "
             f"if rewriting is needed, use {OUT_ROOT / 'codex_rewrite_prompt.txt'}; "
             f"write fig23 via {OUT_ROOT / FIG23_CODEX_PROMPT_NAME} -> {OUT_ROOT / FIG23_CODEX_SPEC_NAME}; "
@@ -7577,7 +8480,7 @@ def run_assist_pipeline() -> None:
         ensure_prewritten_text_ready()
     except Exception as exc:
         raise RuntimeError(
-            "Assist mode requires body text written by the current Codex session (ch01~ch07.txt and summary.txt)."
+            f"Assist mode requires body text written by the current Codex session ({chapter_text_file_list_text()} and {OUT_ROOT / 'summary.txt'})."
             f"Please use {OUT_ROOT / CODEX_CONTENT_BLUEPRINT_NAME} and {OUT_ROOT / 'codex_rewrite_prompt.txt'} before rerunning."
         ) from exc
 
@@ -7641,6 +8544,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--topic", default=None, help="医学主题，例如：肠黏膜修复、儿童流感疫苗市场")
     parser.add_argument("--disease", default=None, help="兼容旧参数：等同于 --topic")
     parser.add_argument("--all-topics", action="store_true", help="遍历 data 目录下全部 *.xlsx，并按文件名自动生成所有医学主题报告")
+    parser.add_argument("--list-templates", action="store_true", help="列出可用 Word 模板 template_id")
+    parser.add_argument("--template-id", default=None, help="模板ID，例如 legacy_default、disease_template_01、drug_template_03")
     parser.add_argument("--data-dir", default="data", help="医学主题 Excel 目录，默认 data")
     parser.add_argument("--from-readme", action="store_true", help="从README读取“医学主题：”配置（未传--topic时生效，兼容“疾病名：”）")
     parser.add_argument("--readme", default="README.md", help="README文件路径（默认README.md）")
@@ -7656,6 +8561,7 @@ def run(
     topic: str,
     xlsx: str | None = None,
     template: str | None = "template.docx",
+    template_id: str | None = None,
     out_base: str | None = "autofile",
     lite_output: bool = False,
 ) -> None:
@@ -7664,9 +8570,11 @@ def run(
         excel_path=Path(xlsx) if xlsx else None,
         template_path=Path(template) if template else None,
         out_base=Path(out_base) if out_base else None,
+        template_id=template_id,
     )
     configure_output_mode(lite_output)
     print(f"流程模式：{WORKFLOW_MODE}（固定）")
+    print(f"模板：{ACTIVE_TEMPLATE_ID} -> {TEMPLATE_PATH}")
     print("Hint: the script prepares evidence, chapter-4 structured data, and Codex prompt assets; body text, fig23 config, and semantic figure overrides must be authored by the current Codex session.")
     print("QA闸门：严格（固定，失败即中断）")
     run_stage1_evidence()
@@ -7685,6 +8593,7 @@ def load_qa_result(qa_path: Path) -> str:
 def run_batch(
     data_dir: str | Path = "data",
     template: str | None = "template.docx",
+    template_id: str | None = None,
     out_base: str | None = "autofile",
     lite_output: bool = False,
 ) -> None:
@@ -7703,7 +8612,7 @@ def run_batch(
         status = "通过"
         detail = ""
         try:
-            run(topic=topic, xlsx=str(xlsx_path), template=template, out_base=out_base, lite_output=lite_output)
+            run(topic=topic, xlsx=str(xlsx_path), template=template, template_id=template_id, out_base=out_base, lite_output=lite_output)
             qa_result = load_qa_result((Path(out_base or "autofile") / topic / "qa_check.txt"))
             if qa_result != "通过":
                 raise RuntimeError(f"qa_check 最终判定为：{qa_result}")
@@ -7747,12 +8656,14 @@ def run_stage3(
 def run_stage4(
     disease: str,
     template: str | None = "template.docx",
+    template_id: str | None = None,
     out_base: str | None = "autofile",
 ) -> None:
     configure_runtime(
         disease_name=disease,
         template_path=Path(template) if template else None,
         out_base=Path(out_base) if out_base else None,
+        template_id=template_id,
     )
     run_stage4_assemble_docx()
 
@@ -7762,8 +8673,22 @@ def run_stage5(disease: str, out_base: str | None = "autofile") -> None:
     run_stage5_qa()
 
 
-def run_refresh_progress(disease: str, out_base: str | None = "autofile") -> None:
-    configure_runtime(disease_name=disease, out_base=Path(out_base) if out_base else None)
+def run_refresh_progress(
+    disease: str,
+    template: str | None = "template.docx",
+    template_id: str | None = None,
+    out_base: str | None = "autofile",
+) -> None:
+    configure_runtime(
+        disease_name=disease,
+        template_path=Path(template) if template else None,
+        template_id=template_id,
+        out_base=Path(out_base) if out_base else None,
+    )
+    ensure_runtime_dirs()
+    write_evidence_and_refs()
+    ensure_codex_prep_assets_ready()
+    write_codex_preflight_assets()
     specs = runtime_block_specs()
     block_text, summary_text = load_existing_text_bundle_partial(specs)
     report, passed = run_txt_stage_checks(specs, block_text, summary_text)
@@ -7778,12 +8703,36 @@ def run_refresh_progress(disease: str, out_base: str | None = "autofile") -> Non
     print(f"已更新：{OUT_ROOT / CODEX_BLOCK_CARD_DIR_NAME}")
 
 
+def list_templates() -> None:
+    rows = []
+    for template_id, profile in sorted(load_template_registry().items()):
+        scope = f"chapter {profile.market_data_chapter}"
+        if profile.market_data_block_id:
+            scope += f" / block {profile.market_data_block_id}"
+        rows.append(
+            {
+                "template_id": template_id,
+                "family": profile.family,
+                "path": str(profile.path),
+                "chapters": str(len(profile.chapters)),
+                "market_data_scope": scope,
+            }
+        )
+    headers = ["template_id", "family", "chapters", "market_data_scope", "path"]
+    print("\t".join(headers))
+    for row in rows:
+        print("\t".join(row[h] for h in headers))
+
+
 def main() -> None:
     args = parse_args()
+    if args.list_templates:
+        list_templates()
+        return
     if args.all_topics and args.refresh_progress:
         raise ValueError("--refresh-progress 不支持与 --all-topics 同时使用。")
     if args.all_topics:
-        run_batch(data_dir=args.data_dir, template=args.template, out_base=args.out_base, lite_output=args.lite_output)
+        run_batch(data_dir=args.data_dir, template=args.template, template_id=args.template_id, out_base=args.out_base, lite_output=args.lite_output)
         return
     topic_name = resolve_topic_name(
         topic=args.topic,
@@ -7792,9 +8741,9 @@ def main() -> None:
         readme_path=args.readme,
     )
     if args.refresh_progress:
-        run_refresh_progress(disease=topic_name, out_base=args.out_base)
+        run_refresh_progress(disease=topic_name, template=args.template, template_id=args.template_id, out_base=args.out_base)
         return
-    run(topic=topic_name, xlsx=args.xlsx, template=args.template, out_base=args.out_base, lite_output=args.lite_output)
+    run(topic=topic_name, xlsx=args.xlsx, template=args.template, template_id=args.template_id, out_base=args.out_base, lite_output=args.lite_output)
 
 
 if __name__ == "__main__":

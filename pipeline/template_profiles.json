@@ -1,0 +1,6057 @@
+{
+  "templates": [
+    {
+      "template_id": "legacy_default",
+      "family": "legacy",
+      "path": "template.docx",
+      "chapters": {
+        "1": "第一章 示例医学主题概述与定义边界",
+        "2": "第二章 示例医学主题机制关联与风险管理",
+        "3": "第三章 示例医学主题临床应用与干预路径",
+        "4": "第四章 示例医学主题市场规模与竞争格局",
+        "5": "第五章 示例医学主题人群画像与终端需求",
+        "6": "第六章 示例医学主题政策环境与监管趋势",
+        "7": "第七章 示例医学主题未来展望与战略建议"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 医学主题定义与应用边界",
+          "target_chars": 1250,
+          "topics": [
+            "定义边界",
+            "分型标准",
+            "诊断标准",
+            "病程分层",
+            "适应证场景"
+          ],
+          "evidence_ids": "E01|E02|E03",
+          "fig_ids": "fig_1_1"
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 核心机制与病理生理基础",
+          "target_chars": 1250,
+          "topics": [
+            "发病机制",
+            "病理改变",
+            "关键通路",
+            "进展链路",
+            "风险触发因素"
+          ],
+          "evidence_ids": "E01|E03|E13",
+          "fig_ids": "fig_1_2|fig_1_3"
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 本章小结",
+          "target_chars": 900,
+          "topics": [
+            "认知框架",
+            "风险分层",
+            "证据导向",
+            "管理边界"
+          ],
+          "evidence_ids": "E01|E02|E13",
+          "fig_ids": "fig_1_4"
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 与相关系统的联系（多系统视角）",
+          "target_chars": 1500,
+          "topics": [
+            "系统关联",
+            "代谢影响",
+            "免疫调节",
+            "神经调控",
+            "系统交互"
+          ],
+          "evidence_ids": "E02|E03|E11",
+          "fig_ids": "fig_2_1"
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 常见风险问题与管理要点",
+          "target_chars": 1500,
+          "topics": [
+            "并发风险",
+            "共病谱",
+            "复发风险",
+            "治疗耐受性",
+            "复诊负担"
+          ],
+          "evidence_ids": "E03|E11|E13",
+          "fig_ids": "fig_2_2|fig_2_3"
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 本章小结",
+          "target_chars": 1000,
+          "topics": [
+            "系统管理",
+            "风险前移",
+            "连续干预",
+            "依从提升"
+          ],
+          "evidence_ids": "E03|E11|E12",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 临床/应用评估标准与检查路径",
+          "target_chars": 1600,
+          "topics": [
+            "分诊评估",
+            "病因筛查",
+            "红旗征识别",
+            "检查路径",
+            "评估量表"
+          ],
+          "evidence_ids": "E02|E03|E11",
+          "fig_ids": "fig_3_1"
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 干预体系与证据结构（药物/器械/疫苗/康复等）",
+          "target_chars": 1600,
+          "topics": [
+            "起始治疗",
+            "联合策略",
+            "药物管理",
+            "安全监测",
+            "疗程调整"
+          ],
+          "evidence_ids": "E03|E06|E13",
+          "fig_ids": "fig_3_2"
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 中医辨证与协同管理（如适用）",
+          "target_chars": 1400,
+          "topics": [
+            "辨证分型",
+            "治则治法",
+            "中成药应用",
+            "中西协同",
+            "证据等级"
+          ],
+          "evidence_ids": "E14|E13|E11",
+          "fig_ids": "fig_3_3"
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 本章小结",
+          "target_chars": 950,
+          "topics": [
+            "规范路径",
+            "证据整合",
+            "风险平衡",
+            "全周期管理"
+          ],
+          "evidence_ids": "E13|E14|E15",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 治疗药物市场概况",
+          "target_chars": 900,
+          "topics": [
+            "渠道规模",
+            "季度趋势",
+            "结构占比",
+            "增长驱动"
+          ],
+          "evidence_ids": "E09|E10|E14",
+          "fig_ids": "fig_4_1|fig_4_2"
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 主要治疗药物分析",
+          "target_chars": 900,
+          "topics": [
+            "头部通用名",
+            "渠道差异",
+            "品种生命周期",
+            "结构优化"
+          ],
+          "evidence_ids": "E08|E14|E15",
+          "fig_ids": "fig_4_3|fig_4_4"
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 市场格局与竞争态势",
+          "target_chars": 900,
+          "topics": [
+            "集中度",
+            "竞争壁垒",
+            "挑战者路径",
+            "效率竞争"
+          ],
+          "evidence_ids": "E08|E14|E15",
+          "fig_ids": "fig_4_5|fig_4_8"
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 本章小结",
+          "target_chars": 800,
+          "topics": [
+            "数据闭环",
+            "经营动作",
+            "跨部门协同",
+            "季度复盘"
+          ],
+          "evidence_ids": "E09|E10|E14",
+          "fig_ids": "fig_4_6|fig_4_7"
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 目标人群结构与终端画像（年龄/地域/负担/偏好）",
+          "target_chars": 1600,
+          "topics": [
+            "年龄结构",
+            "就诊场景",
+            "地区差异",
+            "疾病负担",
+            "需求分层"
+          ],
+          "evidence_ids": "E04|E08|E13",
+          "fig_ids": "fig_5_1"
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 终端使用偏好与未满足需求",
+          "target_chars": 1600,
+          "topics": [
+            "处方偏好",
+            "科室差异",
+            "证据偏好",
+            "未满足需求",
+            "教育路径"
+          ],
+          "evidence_ids": "E03|E05|E08",
+          "fig_ids": "fig_5_2|fig_5_4"
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 依从性与长期管理（使用现状/影响因素/管理策略）",
+          "target_chars": 1400,
+          "topics": [
+            "依从瓶颈",
+            "行为执行",
+            "复购管理",
+            "随访机制",
+            "长期控制"
+          ],
+          "evidence_ids": "E04|E05|E12",
+          "fig_ids": "fig_5_3"
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 本章小结",
+          "target_chars": 900,
+          "topics": [
+            "患者中心",
+            "医生协同",
+            "连续管理",
+            "服务化能力"
+          ],
+          "evidence_ids": "E04|E05|E15",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 医学主题政策环境（全球与中国）",
+          "target_chars": 1700,
+          "topics": [
+            "政策主线",
+            "临床规范",
+            "准入与支付",
+            "质量体系",
+            "监管协同"
+          ],
+          "evidence_ids": "E09|E10|E11",
+          "fig_ids": "fig_6_1"
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 监管趋势（审评审批/质量控制/医保支付/行业监管影响）",
+          "target_chars": 1700,
+          "topics": [
+            "审评提速",
+            "质量标准",
+            "医保支付",
+            "合规传播",
+            "全链条监管"
+          ],
+          "evidence_ids": "E09|E10|E11",
+          "fig_ids": "fig_6_2"
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 本章小结",
+          "target_chars": 1000,
+          "topics": [
+            "政策约束",
+            "策略边界",
+            "合规经营",
+            "长期确定性"
+          ],
+          "evidence_ids": "E09|E10|E15",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 未来市场预测（负担/市场规模/方案演进；量化+方法+来源）",
+          "target_chars": 1700,
+          "topics": [
+            "需求预测",
+            "规模外推",
+            "渠道重构",
+            "证据升级",
+            "方案演进"
+          ],
+          "evidence_ids": "E08|E13|E14",
+          "fig_ids": "fig_7_1"
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 战略建议（面向市场部/战略部：定位、证据、准入、渠道、竞争、生命周期）",
+          "target_chars": 1700,
+          "topics": [
+            "定位策略",
+            "证据策略",
+            "准入策略",
+            "渠道策略",
+            "生命周期管理"
+          ],
+          "evidence_ids": "E08|E10|E15",
+          "fig_ids": "fig_7_2"
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 本章小结",
+          "target_chars": 1000,
+          "topics": [
+            "前瞻判断",
+            "执行闭环",
+            "组织协同",
+            "风险应对"
+          ],
+          "evidence_ids": "E10|E14|E15",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 4
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "disease_template_01",
+      "family": "疾病对应药品市场报告模板",
+      "path": "template/疾病对应药品市场报告模板/template1.docx",
+      "chapters": {
+        "1": "第一章 疾病概述",
+        "2": "第二章 疾病关联与系统拓展",
+        "3": "第三章 临床诊断与治疗现状",
+        "4": "第四章 药物治疗与市场格局",
+        "5": "第五章 患者与临床需求",
+        "6": "第六章 政策环境与监管趋势",
+        "7": "第七章 未来展望与战略建议"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 疾病定义与分类",
+          "target_chars": 1250,
+          "topics": [
+            "疾病定义",
+            "分类"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 发病机制与病理生理",
+          "target_chars": 1250,
+          "topics": [
+            "发病机制",
+            "病理生理"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 与相关系统的联系",
+          "target_chars": 1500,
+          "topics": [
+            "相关系统的联系"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 常见并发症与合并症",
+          "target_chars": 1500,
+          "topics": [
+            "常见并发症",
+            "合并症"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 临床诊断标准与检查手段",
+          "target_chars": 1433,
+          "topics": [
+            "临床诊断标准",
+            "检查手段"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 西医治疗体系",
+          "target_chars": 1433,
+          "topics": [
+            "西医治疗体系"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 中医辨证体系与常用方药",
+          "target_chars": 1433,
+          "topics": [
+            "中医辨证体系",
+            "常用方药"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 代表性产品及主流企业",
+          "target_chars": 1250,
+          "topics": [
+            "代表性产品",
+            "主流企业"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 市场规模与竞争结构",
+          "target_chars": 1250,
+          "topics": [
+            "市场规模",
+            "竞争结构"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 患者群体结构与画像",
+          "target_chars": 1433,
+          "topics": [
+            "患者群体结构",
+            "画像"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 医生用药偏好与诊疗习惯",
+          "target_chars": 1433,
+          "topics": [
+            "医生用药偏好",
+            "诊疗习惯"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 患者依从性与长期管理",
+          "target_chars": 1433,
+          "topics": [
+            "患者依从性",
+            "长期管理"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 各销售渠道情况",
+          "target_chars": 4300,
+          "topics": [
+            "各销售渠道情况"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 未来市场预测",
+          "target_chars": 4300,
+          "topics": [
+            "未来市场预测"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 4
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "disease_template_02",
+      "family": "疾病对应药品市场报告模板",
+      "path": "template/疾病对应药品市场报告模板/template2.docx",
+      "chapters": {
+        "1": "第一章 疾病概述与治疗边界",
+        "2": "第二章 疾病流行病学数据",
+        "3": "第三章 临床诊断与治疗现状",
+        "4": "第四章 治疗药物市场规模",
+        "5": "第五章 代表药物与竞品分析",
+        "6": "第六章 企业竞争格局",
+        "7": "第七章 市场机会与风险判断"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 疾病定义与分类",
+          "target_chars": 900,
+          "topics": [
+            "疾病定义",
+            "分类"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 疾病诊断标准",
+          "target_chars": 900,
+          "topics": [
+            "疾病诊断标准"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 治疗目标与用药边界",
+          "target_chars": 900,
+          "topics": [
+            "治疗目标",
+            "用药边界"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 目标患者范围",
+          "target_chars": 900,
+          "topics": [
+            "目标患者范围"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.5",
+          "chapter": 1,
+          "subtitle": "1.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 患病率与发病率",
+          "target_chars": 900,
+          "topics": [
+            "患病率",
+            "发病率"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 患者人数测算",
+          "target_chars": 900,
+          "topics": [
+            "患者人数测算"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 年龄、性别与地区分布",
+          "target_chars": 900,
+          "topics": [
+            "年龄",
+            "性别",
+            "地区分布"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 疾病负担与医疗支出",
+          "target_chars": 900,
+          "topics": [
+            "疾病负担",
+            "医疗支出"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.5",
+          "chapter": 2,
+          "subtitle": "2.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 当前治疗指南",
+          "target_chars": 1075,
+          "topics": [
+            "当前治疗指南"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 一线治疗药物",
+          "target_chars": 1075,
+          "topics": [
+            "一线治疗药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 二线及联合用药",
+          "target_chars": 1075,
+          "topics": [
+            "二线",
+            "联合用药"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 辅助治疗与长期管理",
+          "target_chars": 1075,
+          "topics": [
+            "辅助治疗",
+            "长期管理"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.5",
+          "chapter": 3,
+          "subtitle": "3.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 全球市场规模",
+          "target_chars": 900,
+          "topics": [
+            "全球市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 中国市场规模",
+          "target_chars": 900,
+          "topics": [
+            "中国市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 细分药物类别规模",
+          "target_chars": 900,
+          "topics": [
+            "细分药物类别规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 已上市主要药物",
+          "target_chars": 1075,
+          "topics": [
+            "已上市主要药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 原研药与仿制药对比",
+          "target_chars": 1075,
+          "topics": [
+            "原研药",
+            "仿制药对比"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 国产药与进口药对比",
+          "target_chars": 1075,
+          "topics": [
+            "国产药",
+            "进口药对比"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 重点竞品销售表现",
+          "target_chars": 1075,
+          "topics": [
+            "重点竞品销售表现"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.5",
+          "chapter": 5,
+          "subtitle": "5.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 主要生产企业",
+          "target_chars": 1433,
+          "topics": [
+            "主要生产企业"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 企业市场份额",
+          "target_chars": 1433,
+          "topics": [
+            "企业市场份额"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 企业产品线布局",
+          "target_chars": 1433,
+          "topics": [
+            "企业产品线布局"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 未满足临床需求",
+          "target_chars": 1075,
+          "topics": [
+            "未满足临床需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 市场增长机会",
+          "target_chars": 1075,
+          "topics": [
+            "市场增长机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 政策与医保风险",
+          "target_chars": 1075,
+          "topics": [
+            "政策",
+            "医保风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.4",
+          "chapter": 7,
+          "subtitle": "7.4 竞争风险与进入建议",
+          "target_chars": 1075,
+          "topics": [
+            "竞争风险",
+            "进入建议"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.5",
+          "chapter": 7,
+          "subtitle": "7.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 5
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "disease_template_03",
+      "family": "疾病对应药品市场报告模板",
+      "path": "template/疾病对应药品市场报告模板/template3.docx",
+      "chapters": {
+        "1": "第一章 疾病诊疗概况",
+        "2": "第二章 国内外治疗指南分析",
+        "3": "第三章 推荐药物市场表现",
+        "4": "第四章 临床需求与未满足需求",
+        "5": "第五章 新药与研发趋势",
+        "6": "第六章 市场机会判断"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 疾病定义",
+          "target_chars": 900,
+          "topics": [
+            "疾病定义"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 临床分型",
+          "target_chars": 900,
+          "topics": [
+            "临床分型"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 诊断流程",
+          "target_chars": 900,
+          "topics": [
+            "诊断流程"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 治疗原则",
+          "target_chars": 900,
+          "topics": [
+            "治疗原则"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.5",
+          "chapter": 1,
+          "subtitle": "1.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 中国指南推荐",
+          "target_chars": 900,
+          "topics": [
+            "中国指南推荐"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 国际指南推荐",
+          "target_chars": 900,
+          "topics": [
+            "国际指南推荐"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 一线用药推荐",
+          "target_chars": 900,
+          "topics": [
+            "一线用药推荐"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 二线及特殊人群用药推荐",
+          "target_chars": 900,
+          "topics": [
+            "二线",
+            "特殊人群用药推荐"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.5",
+          "chapter": 2,
+          "subtitle": "2.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 指南推荐药物销售规模",
+          "target_chars": 1075,
+          "topics": [
+            "指南推荐药物销售规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 重点药物市场份额",
+          "target_chars": 1075,
+          "topics": [
+            "重点药物市场份额"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 医院使用情况",
+          "target_chars": 1075,
+          "topics": [
+            "医院使用情况"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 临床替代关系",
+          "target_chars": 1075,
+          "topics": [
+            "临床替代关系"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.5",
+          "chapter": 3,
+          "subtitle": "3.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 疗效不足问题",
+          "target_chars": 900,
+          "topics": [
+            "疗效不足问题"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 安全性问题",
+          "target_chars": 900,
+          "topics": [
+            "安全性问题"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 长期用药依从性问题",
+          "target_chars": 900,
+          "topics": [
+            "长期用药依从性问题"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 特殊患者用药需求",
+          "target_chars": 900,
+          "topics": [
+            "特殊患者用药需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.5",
+          "chapter": 4,
+          "subtitle": "4.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 新机制药物",
+          "target_chars": 1075,
+          "topics": [
+            "新机制药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 临床试验药物",
+          "target_chars": 1075,
+          "topics": [
+            "临床试验药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 在研企业布局",
+          "target_chars": 1075,
+          "topics": [
+            "在研企业布局"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 未来治疗方向",
+          "target_chars": 1075,
+          "topics": [
+            "未来治疗方向"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.5",
+          "chapter": 5,
+          "subtitle": "5.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 指南升级机会",
+          "target_chars": 1075,
+          "topics": [
+            "指南升级机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 药物替代机会",
+          "target_chars": 1075,
+          "topics": [
+            "药物替代机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 联合用药机会",
+          "target_chars": 1075,
+          "topics": [
+            "联合用药机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 产品市场建议",
+          "target_chars": 1075,
+          "topics": [
+            "产品市场建议"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.5",
+          "chapter": 6,
+          "subtitle": "6.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 3
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "disease_template_04",
+      "family": "疾病对应药品市场报告模板",
+      "path": "template/疾病对应药品市场报告模板/template4.docx",
+      "chapters": {
+        "1": "第一章 疾病治疗药物市场概况",
+        "2": "第二章 已上市药物梳理",
+        "3": "第三章 市场销售表现",
+        "4": "第四章 产品差异化对比",
+        "5": "第五章 企业竞争分析",
+        "6": "第六章 竞争策略建议"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 疾病治疗现状",
+          "target_chars": 900,
+          "topics": [
+            "疾病治疗现状"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 药物分类",
+          "target_chars": 900,
+          "topics": [
+            "药物分类"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 市场发展阶段",
+          "target_chars": 900,
+          "topics": [
+            "市场发展阶段"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 竞争格局概览",
+          "target_chars": 900,
+          "topics": [
+            "竞争格局概览"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.5",
+          "chapter": 1,
+          "subtitle": "1.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 原研药",
+          "target_chars": 900,
+          "topics": [
+            "原研药"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 仿制药",
+          "target_chars": 900,
+          "topics": [
+            "仿制药"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 中成药",
+          "target_chars": 900,
+          "topics": [
+            "中成药"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 生物药或创新药",
+          "target_chars": 900,
+          "topics": [
+            "生物药或创新药"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.5",
+          "chapter": 2,
+          "subtitle": "2.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 医院端表现",
+          "target_chars": 1433,
+          "topics": [
+            "医院端表现"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 零售端表现",
+          "target_chars": 1433,
+          "topics": [
+            "零售端表现"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 线上端表现",
+          "target_chars": 1433,
+          "topics": [
+            "线上端表现"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 疗效差异",
+          "target_chars": 900,
+          "topics": [
+            "疗效差异"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 安全性差异",
+          "target_chars": 900,
+          "topics": [
+            "安全性差异"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 剂型差异",
+          "target_chars": 900,
+          "topics": [
+            "剂型差异"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 价格差异",
+          "target_chars": 900,
+          "topics": [
+            "价格差异"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.5",
+          "chapter": 4,
+          "subtitle": "4.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 头部企业",
+          "target_chars": 1075,
+          "topics": [
+            "头部企业"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 区域企业",
+          "target_chars": 1075,
+          "topics": [
+            "区域企业"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 新进入企业",
+          "target_chars": 1075,
+          "topics": [
+            "新进入企业"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 研发管线企业",
+          "target_chars": 1075,
+          "topics": [
+            "研发管线企业"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.5",
+          "chapter": 5,
+          "subtitle": "5.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 产品定位策略",
+          "target_chars": 1075,
+          "topics": [
+            "产品定位策略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 差异化卖点",
+          "target_chars": 1075,
+          "topics": [
+            "差异化卖点"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 定价策略",
+          "target_chars": 1075,
+          "topics": [
+            "定价策略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 市场切入路径",
+          "target_chars": 1075,
+          "topics": [
+            "市场切入路径"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.5",
+          "chapter": 6,
+          "subtitle": "6.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 3
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "disease_template_05",
+      "family": "疾病对应药品市场报告模板",
+      "path": "template/疾病对应药品市场报告模板/template5.docx",
+      "chapters": {
+        "1": "第一章 疾病治疗痛点",
+        "2": "第二章 现有治疗药物格局",
+        "3": "第三章 新机制药物分析",
+        "4": "第四章 研发管线与临床试验",
+        "5": "第五章 创新药市场空间",
+        "6": "第六章 商业化与准入分析",
+        "7": "第七章 投资与立项判断"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 现有治疗不足",
+          "target_chars": 900,
+          "topics": [
+            "现有治疗不足"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 未满足临床需求",
+          "target_chars": 900,
+          "topics": [
+            "未满足临床需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 患者获益空间",
+          "target_chars": 900,
+          "topics": [
+            "患者获益空间"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 新机制药物开发价值",
+          "target_chars": 900,
+          "topics": [
+            "新机制药物开发价值"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.5",
+          "chapter": 1,
+          "subtitle": "1.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 标准治疗药物",
+          "target_chars": 900,
+          "topics": [
+            "标准治疗药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 已上市创新药",
+          "target_chars": 900,
+          "topics": [
+            "已上市创新药"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 仿制药竞争情况",
+          "target_chars": 900,
+          "topics": [
+            "仿制药竞争情况"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 现有药物局限性",
+          "target_chars": 900,
+          "topics": [
+            "现有药物局限性"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.5",
+          "chapter": 2,
+          "subtitle": "2.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 作用靶点",
+          "target_chars": 1075,
+          "topics": [
+            "作用靶点"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 作用机制",
+          "target_chars": 1075,
+          "topics": [
+            "作用机制"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 临床疗效数据",
+          "target_chars": 1075,
+          "topics": [
+            "临床疗效数据"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 安全性数据",
+          "target_chars": 1075,
+          "topics": [
+            "安全性数据"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.5",
+          "chapter": 3,
+          "subtitle": "3.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 全球在研药物",
+          "target_chars": 900,
+          "topics": [
+            "全球在研药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 中国在研药物",
+          "target_chars": 900,
+          "topics": [
+            "中国在研药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 临床阶段分布",
+          "target_chars": 900,
+          "topics": [
+            "临床阶段分布"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 重点企业管线",
+          "target_chars": 900,
+          "topics": [
+            "重点企业管线"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 目标患者规模",
+          "target_chars": 1075,
+          "topics": [
+            "目标患者规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 渗透率假设",
+          "target_chars": 1075,
+          "topics": [
+            "渗透率假设"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 定价空间",
+          "target_chars": 1075,
+          "topics": [
+            "定价空间"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 峰值销售额预测",
+          "target_chars": 1075,
+          "topics": [
+            "峰值销售额预测"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.5",
+          "chapter": 5,
+          "subtitle": "5.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 注册审批路径",
+          "target_chars": 1075,
+          "topics": [
+            "注册审批路径"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 医保谈判可能性",
+          "target_chars": 1075,
+          "topics": [
+            "医保谈判可能性"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 医院准入策略",
+          "target_chars": 1075,
+          "topics": [
+            "医院准入策略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 学术推广路径",
+          "target_chars": 1075,
+          "topics": [
+            "学术推广路径"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 技术壁垒",
+          "target_chars": 1075,
+          "topics": [
+            "技术壁垒"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 市场壁垒",
+          "target_chars": 1075,
+          "topics": [
+            "市场壁垒"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 商业化风险",
+          "target_chars": 1075,
+          "topics": [
+            "商业化风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.4",
+          "chapter": 7,
+          "subtitle": "7.4 立项可行性结论",
+          "target_chars": 1075,
+          "topics": [
+            "立项可行性结论"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.5",
+          "chapter": 7,
+          "subtitle": "7.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 2,
+        "block_id": "2.1"
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "disease_template_06",
+      "family": "疾病对应药品市场报告模板",
+      "path": "template/疾病对应药品市场报告模板/template6.docx",
+      "chapters": {
+        "1": "第一章 项目概述与研究边界",
+        "2": "第二章 疾病人群与临床需求分析",
+        "3": "第三章 治疗药物市场规模分析",
+        "4": "第四章 竞争格局与代表产品分析",
+        "5": "第五章 政策、医保与准入环境",
+        "6": "第六章 商业机会与发展建议"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 疾病定义与治疗范围",
+          "target_chars": 900,
+          "topics": [
+            "疾病定义",
+            "治疗范围"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 治疗药物研究口径",
+          "target_chars": 900,
+          "topics": [
+            "治疗药物研究口径"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 数据来源与测算逻辑",
+          "target_chars": 900,
+          "topics": [
+            "数据来源",
+            "测算逻辑"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 患者规模与流行病学数据",
+          "target_chars": 900,
+          "topics": [
+            "患者规模",
+            "流行病学数据"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 诊断率、治疗率与用药率",
+          "target_chars": 900,
+          "topics": [
+            "诊断率",
+            "治疗率",
+            "用药率"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 临床治疗路径",
+          "target_chars": 900,
+          "topics": [
+            "临床治疗路径"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 未满足治疗需求",
+          "target_chars": 900,
+          "topics": [
+            "未满足治疗需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.5",
+          "chapter": 2,
+          "subtitle": "2.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 历史市场规模",
+          "target_chars": 1075,
+          "topics": [
+            "历史市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 当前市场规模",
+          "target_chars": 1075,
+          "topics": [
+            "当前市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 细分市场结构",
+          "target_chars": 1075,
+          "topics": [
+            "细分市场结构"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 未来市场预测",
+          "target_chars": 1075,
+          "topics": [
+            "未来市场预测"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.5",
+          "chapter": 3,
+          "subtitle": "3.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 已上市治疗药物梳理",
+          "target_chars": 900,
+          "topics": [
+            "已上市治疗药物梳理"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 主要企业竞争格局",
+          "target_chars": 900,
+          "topics": [
+            "主要企业竞争格局"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 重点竞品销售表现",
+          "target_chars": 900,
+          "topics": [
+            "重点竞品销售表现"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 产品差异化对比",
+          "target_chars": 900,
+          "topics": [
+            "产品差异化对比"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.5",
+          "chapter": 4,
+          "subtitle": "4.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 药品注册审批环境",
+          "target_chars": 1075,
+          "topics": [
+            "药品注册审批环境"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 医保目录与支付限制",
+          "target_chars": 1075,
+          "topics": [
+            "医保目录",
+            "支付限制"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 集采与价格政策",
+          "target_chars": 1075,
+          "topics": [
+            "集采",
+            "价格政策"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 医院准入与渠道限制",
+          "target_chars": 1075,
+          "topics": [
+            "医院准入",
+            "渠道限制"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.5",
+          "chapter": 5,
+          "subtitle": "5.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 市场增长机会",
+          "target_chars": 1075,
+          "topics": [
+            "市场增长机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 产品定位建议",
+          "target_chars": 1075,
+          "topics": [
+            "产品定位建议"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 渠道与推广建议",
+          "target_chars": 1075,
+          "topics": [
+            "渠道",
+            "推广建议"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 风险判断与应对策略",
+          "target_chars": 1075,
+          "topics": [
+            "风险判断",
+            "应对策略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.5",
+          "chapter": 6,
+          "subtitle": "6.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 4
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "disease_template_07",
+      "family": "疾病对应药品市场报告模板",
+      "path": "template/疾病对应药品市场报告模板/template7.docx",
+      "chapters": {
+        "1": "第一章 市场进入背景",
+        "2": "第二章 市场需求分析",
+        "3": "第三章 市场规模与增长空间",
+        "4": "第四章 竞品与替代分析",
+        "5": "第五章 波特五力模型分析",
+        "6": "第六章 商业化路径设计",
+        "7": "第七章 风险与落地建议"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 疾病治疗现状",
+          "target_chars": 900,
+          "topics": [
+            "疾病治疗现状"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 药物市场发展阶段",
+          "target_chars": 900,
+          "topics": [
+            "药物市场发展阶段"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 产品进入必要性",
+          "target_chars": 900,
+          "topics": [
+            "产品进入必要性"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 商业化目标",
+          "target_chars": 900,
+          "topics": [
+            "商业化目标"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.5",
+          "chapter": 1,
+          "subtitle": "1.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 患者端需求",
+          "target_chars": 900,
+          "topics": [
+            "患者端需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 医生端需求",
+          "target_chars": 900,
+          "topics": [
+            "医生端需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 医院端需求",
+          "target_chars": 900,
+          "topics": [
+            "医院端需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 支付端需求",
+          "target_chars": 900,
+          "topics": [
+            "支付端需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.5",
+          "chapter": 2,
+          "subtitle": "2.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 当前市场规模",
+          "target_chars": 1075,
+          "topics": [
+            "当前市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 细分市场规模",
+          "target_chars": 1075,
+          "topics": [
+            "细分市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 增长驱动因素",
+          "target_chars": 1075,
+          "topics": [
+            "增长驱动因素"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 市场天花板测算",
+          "target_chars": 1075,
+          "topics": [
+            "市场天花板测算"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.5",
+          "chapter": 3,
+          "subtitle": "3.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 主要竞品清单",
+          "target_chars": 900,
+          "topics": [
+            "主要竞品清单"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 竞品市场表现",
+          "target_chars": 900,
+          "topics": [
+            "竞品市场表现"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 替代产品分析",
+          "target_chars": 900,
+          "topics": [
+            "替代产品分析"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 差异化机会分析",
+          "target_chars": 900,
+          "topics": [
+            "差异化机会分析"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.5",
+          "chapter": 4,
+          "subtitle": "4.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 现有竞争者竞争强度",
+          "target_chars": 900,
+          "topics": [
+            "现有竞争者竞争强度"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 潜在进入者威胁",
+          "target_chars": 900,
+          "topics": [
+            "潜在进入者威胁"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 替代品威胁",
+          "target_chars": 900,
+          "topics": [
+            "替代品威胁"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 供应商议价能力",
+          "target_chars": 900,
+          "topics": [
+            "供应商议价能力"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.5",
+          "chapter": 5,
+          "subtitle": "5.5 购买者议价能力",
+          "target_chars": 900,
+          "topics": [
+            "购买者议价能力"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.6",
+          "chapter": 5,
+          "subtitle": "5.6 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 产品定位",
+          "target_chars": 1075,
+          "topics": [
+            "产品定位"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 价格策略",
+          "target_chars": 1075,
+          "topics": [
+            "价格策略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 渠道策略",
+          "target_chars": 1075,
+          "topics": [
+            "渠道策略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 推广策略",
+          "target_chars": 1075,
+          "topics": [
+            "推广策略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.5",
+          "chapter": 6,
+          "subtitle": "6.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 政策风险",
+          "target_chars": 1075,
+          "topics": [
+            "政策风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 竞争风险",
+          "target_chars": 1075,
+          "topics": [
+            "竞争风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 价格风险",
+          "target_chars": 1075,
+          "topics": [
+            "价格风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.4",
+          "chapter": 7,
+          "subtitle": "7.4 市场落地建议",
+          "target_chars": 1075,
+          "topics": [
+            "市场落地建议"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.5",
+          "chapter": 7,
+          "subtitle": "7.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 4
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "disease_template_08",
+      "family": "疾病对应药品市场报告模板",
+      "path": "template/疾病对应药品市场报告模板/template8.docx",
+      "chapters": {
+        "1": "第一章 疾病概况与诊疗背景",
+        "2": "第二章 治疗药物分类与应用现状",
+        "3": "第三章 市场规模与增长趋势",
+        "4": "第四章 竞争格局分析",
+        "5": "第五章 药品价格与销售渠道",
+        "6": "第六章 未来发展趋势与机会",
+        "7": "第七章 产品升级方向"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 疾病定义与临床表现",
+          "target_chars": 900,
+          "topics": [
+            "疾病定义",
+            "临床表现"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 患病人群与疾病负担",
+          "target_chars": 900,
+          "topics": [
+            "患病人群",
+            "疾病负担"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 诊疗路径与用药场景",
+          "target_chars": 900,
+          "topics": [
+            "诊疗路径",
+            "用药场景"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.5",
+          "chapter": 1,
+          "subtitle": "1.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 一线治疗药物",
+          "target_chars": 1000,
+          "topics": [
+            "一线治疗药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 二线及辅助治疗药物",
+          "target_chars": 1000,
+          "topics": [
+            "二线",
+            "辅助治疗药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 联合用药与替代方案",
+          "target_chars": 1000,
+          "topics": [
+            "联合用药",
+            "替代方案"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 全球市场规模",
+          "target_chars": 1433,
+          "topics": [
+            "全球市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 中国市场规模",
+          "target_chars": 1433,
+          "topics": [
+            "中国市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 市场增长驱动因素",
+          "target_chars": 1433,
+          "topics": [
+            "市场增长驱动因素"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 主要企业",
+          "target_chars": 900,
+          "topics": [
+            "主要企业"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 主要产品",
+          "target_chars": 900,
+          "topics": [
+            "主要产品"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 市场份额",
+          "target_chars": 900,
+          "topics": [
+            "市场份额"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 终端价格",
+          "target_chars": 1075,
+          "topics": [
+            "终端价格"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 医院渠道",
+          "target_chars": 1075,
+          "topics": [
+            "医院渠道"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 零售渠道",
+          "target_chars": 1075,
+          "topics": [
+            "零售渠道"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 线上渠道",
+          "target_chars": 1075,
+          "topics": [
+            "线上渠道"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.5",
+          "chapter": 5,
+          "subtitle": "5.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 未来发展趋势",
+          "target_chars": 2150,
+          "topics": [
+            "未来发展趋势"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 市场机会",
+          "target_chars": 2150,
+          "topics": [
+            "市场机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 经典治疗方法",
+          "target_chars": 1433,
+          "topics": [
+            "经典治疗方法"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 二次开发机会",
+          "target_chars": 1433,
+          "topics": [
+            "二次开发机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 大健康延展机会",
+          "target_chars": 1433,
+          "topics": [
+            "大健康延展机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.4",
+          "chapter": 7,
+          "subtitle": "7.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 4
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "disease_template_09",
+      "family": "疾病对应药品市场报告模板",
+      "path": "template/疾病对应药品市场报告模板/template9.docx",
+      "chapters": {
+        "1": "第一章 疾病与治疗领域概述",
+        "2": "第二章 目标治疗药物概述",
+        "3": "第三章 市场规模与增长趋势",
+        "4": "第四章 患者人群与用药需求分析",
+        "5": "第五章 竞争格局分析",
+        "6": "第六章 研发管线与创新趋势",
+        "7": "第七章 政策、医保与准入环境",
+        "8": "第八章 渠道与终端市场分析",
+        "9": "第九章 市场机会与风险分析"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 疾病定义与临床分型",
+          "target_chars": 900,
+          "topics": [
+            "疾病定义",
+            "临床分型"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 发病机制与疾病负担",
+          "target_chars": 900,
+          "topics": [
+            "发病机制",
+            "疾病负担"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 诊疗路径与用药场景",
+          "target_chars": 900,
+          "topics": [
+            "诊疗路径",
+            "用药场景"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 药物类别与作用机制",
+          "target_chars": 1000,
+          "topics": [
+            "药物类别",
+            "作用机制"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 主要适应症与临床定位",
+          "target_chars": 1000,
+          "topics": [
+            "主要适应症",
+            "临床定位"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 代表性药品与剂型",
+          "target_chars": 1000,
+          "topics": [
+            "代表性药品",
+            "剂型"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 全球市场规模",
+          "target_chars": 1433,
+          "topics": [
+            "全球市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 中国市场规模",
+          "target_chars": 1433,
+          "topics": [
+            "中国市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 市场增长驱动因素",
+          "target_chars": 1433,
+          "topics": [
+            "市场增长驱动因素"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.5",
+          "chapter": 3,
+          "subtitle": "3.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 患病率与患者基数",
+          "target_chars": 900,
+          "topics": [
+            "患病率",
+            "患者基数"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 治疗率与用药渗透率",
+          "target_chars": 900,
+          "topics": [
+            "治疗率",
+            "用药渗透率"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 未满足临床需求",
+          "target_chars": 900,
+          "topics": [
+            "未满足临床需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 主要企业与产品分布",
+          "target_chars": 2150,
+          "topics": [
+            "主要企业",
+            "产品分布"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 市场份额与竞争壁垒",
+          "target_chars": 2150,
+          "topics": [
+            "市场份额",
+            "竞争壁垒"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 在研药物管线",
+          "target_chars": 1433,
+          "topics": [
+            "在研药物管线"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 新靶点与新机制",
+          "target_chars": 1433,
+          "topics": [
+            "新靶点",
+            "新机制"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 临床试验进展",
+          "target_chars": 1433,
+          "topics": [
+            "临床试验进展"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 药品注册审批政策",
+          "target_chars": 1433,
+          "topics": [
+            "药品注册审批政策"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 医保准入与支付环境",
+          "target_chars": 1433,
+          "topics": [
+            "医保准入",
+            "支付环境"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 集采与价格影响",
+          "target_chars": 1433,
+          "topics": [
+            "集采",
+            "价格影响"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.4",
+          "chapter": 7,
+          "subtitle": "7.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.1",
+          "chapter": 8,
+          "subtitle": "8.1 医院端市场",
+          "target_chars": 1433,
+          "topics": [
+            "医院端市场"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.2",
+          "chapter": 8,
+          "subtitle": "8.2 零售药店市场",
+          "target_chars": 1433,
+          "topics": [
+            "零售药店市场"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.3",
+          "chapter": 8,
+          "subtitle": "8.3 互联网医疗与院外渠道",
+          "target_chars": 1433,
+          "topics": [
+            "互联网医疗",
+            "院外渠道"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.4",
+          "chapter": 8,
+          "subtitle": "8.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "9.1",
+          "chapter": 9,
+          "subtitle": "9.1 市场机会",
+          "target_chars": 1433,
+          "topics": [
+            "市场机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "9.2",
+          "chapter": 9,
+          "subtitle": "9.2 市场风险",
+          "target_chars": 1433,
+          "topics": [
+            "市场风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "9.3",
+          "chapter": 9,
+          "subtitle": "9.3 企业进入策略",
+          "target_chars": 1433,
+          "topics": [
+            "企业进入策略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "9.4",
+          "chapter": 9,
+          "subtitle": "9.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 5
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800,
+        "8": 4800,
+        "9": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "disease_template_10",
+      "family": "疾病对应药品市场报告模板",
+      "path": "template/疾病对应药品市场报告模板/template10.docx",
+      "chapters": {
+        "1": "第一章 项目研究背景",
+        "2": "第二章 疾病负担与临床价值",
+        "3": "第三章 药物市场容量测算",
+        "4": "第四章 产品商业化潜力分析",
+        "5": "第五章 竞品与替代方案分析",
+        "6": "第六章 价格体系与支付能力",
+        "7": "第七章 企业竞争与市场集中度",
+        "8": "第八章 研发管线与未来替代风险"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 疾病领域投资逻辑",
+          "target_chars": 900,
+          "topics": [
+            "疾病领域投资逻辑"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 药物市场研究范围",
+          "target_chars": 900,
+          "topics": [
+            "药物市场研究范围"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 报告核心结论摘要",
+          "target_chars": 900,
+          "topics": [
+            "报告核心结论摘要"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 患病人群规模",
+          "target_chars": 1000,
+          "topics": [
+            "患病人群规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 疾病治疗痛点",
+          "target_chars": 1000,
+          "topics": [
+            "疾病治疗痛点"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 药物干预价值",
+          "target_chars": 1000,
+          "topics": [
+            "药物干预价值"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 患者基数测算",
+          "target_chars": 1433,
+          "topics": [
+            "患者基数测算"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 治疗率测算",
+          "target_chars": 1433,
+          "topics": [
+            "治疗率测算"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 市场规模测算模型",
+          "target_chars": 1433,
+          "topics": [
+            "市场规模测算模型"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 药物疗效优势",
+          "target_chars": 900,
+          "topics": [
+            "药物疗效优势"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 安全性与依从性",
+          "target_chars": 900,
+          "topics": [
+            "安全性",
+            "依从性"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 临床替代空间",
+          "target_chars": 900,
+          "topics": [
+            "临床替代空间"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 现有治疗药物",
+          "target_chars": 1433,
+          "topics": [
+            "现有治疗药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 同类竞品",
+          "target_chars": 1433,
+          "topics": [
+            "同类竞品"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 非药物治疗替代方案",
+          "target_chars": 1433,
+          "topics": [
+            "非药物治疗替代方案"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 药品价格区间",
+          "target_chars": 1433,
+          "topics": [
+            "药品价格区间"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 医保支付情况",
+          "target_chars": 1433,
+          "topics": [
+            "医保支付情况"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 患者自费能力",
+          "target_chars": 1433,
+          "topics": [
+            "患者自费能力"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 主要参与企业",
+          "target_chars": 1433,
+          "topics": [
+            "主要参",
+            "企业"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 品牌竞争格局",
+          "target_chars": 1433,
+          "topics": [
+            "品牌竞争格局"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 市场进入壁垒",
+          "target_chars": 1433,
+          "topics": [
+            "市场进入壁垒"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.4",
+          "chapter": 7,
+          "subtitle": "7.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.1",
+          "chapter": 8,
+          "subtitle": "8.1 国内在研项目",
+          "target_chars": 1433,
+          "topics": [
+            "国内在研项目"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.2",
+          "chapter": 8,
+          "subtitle": "8.2 国外创新药趋势",
+          "target_chars": 1433,
+          "topics": [
+            "国外创新药趋势"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.3",
+          "chapter": 8,
+          "subtitle": "8.3 潜在替代产品",
+          "target_chars": 1433,
+          "topics": [
+            "潜在替代产品"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.4",
+          "chapter": 8,
+          "subtitle": "8.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 5
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800,
+        "8": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "drug_template_01",
+      "family": "药品市场报告模板",
+      "path": "template/药品市场报告模板/template1.docx",
+      "chapters": {
+        "1": "第一章 执行摘要",
+        "2": "第二章 市场概述与行业趋势",
+        "3": "第三章 市场竞争格局分析",
+        "4": "第四章 目标市场与客户洞察",
+        "5": "第五章 药品分析与定位策略",
+        "6": "第六章 销售渠道与市场推广策略",
+        "7": "第七章 波特五力模型",
+        "8": "第八章 风险分析与战略建议"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 调研背景与目标",
+          "target_chars": 1250,
+          "topics": [
+            "调研背景",
+            "目标"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 核心发现概述",
+          "target_chars": 1250,
+          "topics": [
+            "核心发现概述"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 中药止血镇痛类药物市场概况",
+          "target_chars": 1000,
+          "topics": [
+            "中药止血镇痛类药物市场概况"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 政策环境分析",
+          "target_chars": 1000,
+          "topics": [
+            "政策环境分析"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 行业发展趋势",
+          "target_chars": 1000,
+          "topics": [
+            "行业发展趋势"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1",
+          "target_chars": 4300,
+          "topics": [
+            "要点展开"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 目标市场分析",
+          "target_chars": 1250,
+          "topics": [
+            "目标市场分析"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 消费者画像",
+          "target_chars": 1250,
+          "topics": [
+            "消费者画像"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 目标消费者画像",
+          "target_chars": 2150,
+          "topics": [
+            "目标消费者画像"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 消费者需求与行为分析",
+          "target_chars": 2150,
+          "topics": [
+            "消费者需求",
+            "行为分析"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 各销售渠道情况",
+          "target_chars": 2150,
+          "topics": [
+            "各销售渠道情况"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 市场推广战略",
+          "target_chars": 2150,
+          "topics": [
+            "市场推广战略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 增长机会",
+          "target_chars": 4300,
+          "topics": [
+            "增长机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.1",
+          "chapter": 8,
+          "subtitle": "8.1 风险分析",
+          "target_chars": 4300,
+          "topics": [
+            "风险分析"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.3",
+          "chapter": 8,
+          "subtitle": "8.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 3
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800,
+        "8": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "drug_template_02",
+      "family": "药品市场报告模板",
+      "path": "template/药品市场报告模板/template2.docx",
+      "chapters": {
+        "1": "第一章 药品概述与研究边界",
+        "2": "第二章 疾病流行病学与患者规模",
+        "3": "第三章 行业政策与监管环境",
+        "4": "第四章 市场规模与增长趋势",
+        "5": "第五章 竞争格局与主要产品",
+        "6": "第六章 渠道、价格与商业化分析",
+        "7": "第七章 市场机会与风险判断"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 药品定义与适应症范围",
+          "target_chars": 900,
+          "topics": [
+            "药品定义",
+            "适应症范围"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 作用机制与临床应用场景",
+          "target_chars": 900,
+          "topics": [
+            "作用机制",
+            "临床应用场景"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 目标人群与使用边界",
+          "target_chars": 900,
+          "topics": [
+            "目标人群",
+            "使用边界"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 疾病患病率与发病率",
+          "target_chars": 1000,
+          "topics": [
+            "疾病患病率",
+            "发病率"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 目标患者人群测算",
+          "target_chars": 1000,
+          "topics": [
+            "目标患者人群测算"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 患者年龄、性别与地区分布",
+          "target_chars": 1000,
+          "topics": [
+            "患者年龄",
+            "性别",
+            "地区分布"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 药品注册与审批政策",
+          "target_chars": 1433,
+          "topics": [
+            "药品注册",
+            "审批政策"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 医保、集采与支付环境",
+          "target_chars": 1433,
+          "topics": [
+            "医保",
+            "集采",
+            "支付环境"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 临床指南与用药规范",
+          "target_chars": 1433,
+          "topics": [
+            "临床指南",
+            "用药规范"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 国内市场规模",
+          "target_chars": 900,
+          "topics": [
+            "国内市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 全球市场规模",
+          "target_chars": 900,
+          "topics": [
+            "全球市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 市场增长驱动因素",
+          "target_chars": 900,
+          "topics": [
+            "市场增长驱动因素"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 未来市场预测",
+          "target_chars": 900,
+          "topics": [
+            "未来市场预测"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.5",
+          "chapter": 4,
+          "subtitle": "4.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 已上市代表药品",
+          "target_chars": 1433,
+          "topics": [
+            "已上市代表药品"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 主要企业竞争格局",
+          "target_chars": 1433,
+          "topics": [
+            "主要企业竞争格局"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 国产与进口产品对比",
+          "target_chars": 1433,
+          "topics": [
+            "国产",
+            "进口产品对比"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 医院端销售渠道",
+          "target_chars": 1433,
+          "topics": [
+            "医院端销售渠道"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 零售药店与线上渠道",
+          "target_chars": 1433,
+          "topics": [
+            "零售药店",
+            "线上渠道"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 药品价格与支付能力",
+          "target_chars": 1433,
+          "topics": [
+            "药品价格",
+            "支付能力"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 市场机会点",
+          "target_chars": 1075,
+          "topics": [
+            "市场机会点"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 进入壁垒",
+          "target_chars": 1075,
+          "topics": [
+            "进入壁垒"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 政策与竞争风险",
+          "target_chars": 1075,
+          "topics": [
+            "政策",
+            "竞争风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.4",
+          "chapter": 7,
+          "subtitle": "7.4 发展建议",
+          "target_chars": 1075,
+          "topics": [
+            "发展建议"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.5",
+          "chapter": 7,
+          "subtitle": "7.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 6
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "drug_template_03",
+      "family": "药品市场报告模板",
+      "path": "template/药品市场报告模板/template3.docx",
+      "chapters": {
+        "1": "第一章 核心结论摘要",
+        "2": "第二章 基础数据总览",
+        "3": "第三章 患者人群数据分析",
+        "4": "第四章 市场销售数据分析",
+        "5": "第五章 竞品数据分析",
+        "6": "第六章 增长预测模型",
+        "7": "第七章 数据结论与策略建议"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 市场规模结论",
+          "target_chars": 900,
+          "topics": [
+            "市场规模结论"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 患者规模结论",
+          "target_chars": 900,
+          "topics": [
+            "患者规模结论"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 竞争格局结论",
+          "target_chars": 900,
+          "topics": [
+            "竞争格局结论"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 疾病基础数据",
+          "target_chars": 1000,
+          "topics": [
+            "疾病基础数据"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 药品基础数据",
+          "target_chars": 1000,
+          "topics": [
+            "药品基础数据"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 企业与产品数量",
+          "target_chars": 1000,
+          "topics": [
+            "企业",
+            "产品数量"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 总患者规模",
+          "target_chars": 1075,
+          "topics": [
+            "总患者规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 可治疗患者规模",
+          "target_chars": 1075,
+          "topics": [
+            "可治疗患者规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 实际用药患者规模",
+          "target_chars": 1075,
+          "topics": [
+            "实际用药患者规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 患者渗透率测算",
+          "target_chars": 1075,
+          "topics": [
+            "患者渗透率测算"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.5",
+          "chapter": 3,
+          "subtitle": "3.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 年度销售额",
+          "target_chars": 900,
+          "topics": [
+            "年度销售额"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 年度销售量",
+          "target_chars": 900,
+          "topics": [
+            "年度销售量"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 终端销售结构",
+          "target_chars": 900,
+          "topics": [
+            "终端销售结构"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 同类药品销售排名",
+          "target_chars": 1075,
+          "topics": [
+            "同类药品销售排名"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 主要企业市场份额",
+          "target_chars": 1075,
+          "topics": [
+            "主要企业市场份额"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 价格带分布",
+          "target_chars": 1075,
+          "topics": [
+            "价格带分布"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 产品剂型与规格对比",
+          "target_chars": 1075,
+          "topics": [
+            "产品剂型",
+            "规格对比"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.5",
+          "chapter": 5,
+          "subtitle": "5.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 市场增长假设",
+          "target_chars": 1075,
+          "topics": [
+            "市场增长假设"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 患者增长预测",
+          "target_chars": 1075,
+          "topics": [
+            "患者增长预测"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 渗透率提升预测",
+          "target_chars": 1075,
+          "topics": [
+            "渗透率提升预测"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 未来3-5年市场规模预测",
+          "target_chars": 1075,
+          "topics": [
+            "未来3-5年市场规模预测"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.5",
+          "chapter": 6,
+          "subtitle": "6.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 数据结论汇总",
+          "target_chars": 1075,
+          "topics": [
+            "数据结论汇总"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 商业机会判断",
+          "target_chars": 1075,
+          "topics": [
+            "商业机会判断"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 产品定位建议",
+          "target_chars": 1075,
+          "topics": [
+            "产品定位建议"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.4",
+          "chapter": 7,
+          "subtitle": "7.4 市场进入建议",
+          "target_chars": 1075,
+          "topics": [
+            "市场进入建议"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.5",
+          "chapter": 7,
+          "subtitle": "7.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 4
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "drug_template_04",
+      "family": "药品市场报告模板",
+      "path": "template/药品市场报告模板/template4.docx",
+      "chapters": {
+        "1": "第一章 项目背景与立项价值",
+        "2": "第二章 药品定位与应用场景",
+        "3": "第三章 市场需求分析",
+        "4": "第四章 市场销售数据分析",
+        "5": "第五章 竞品与差异化分析",
+        "6": "第六章 商业模式与推广路径",
+        "7": "第七章 项目风险与可行性判断"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 疾病负担与未满足需求",
+          "target_chars": 900,
+          "topics": [
+            "疾病负担",
+            "未满足需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 当前治疗现状",
+          "target_chars": 900,
+          "topics": [
+            "当前治疗现状"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 产品开发必要性",
+          "target_chars": 900,
+          "topics": [
+            "产品开发必要性"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 药品功能定位",
+          "target_chars": 900,
+          "topics": [
+            "药品功能定位"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 目标适应症",
+          "target_chars": 900,
+          "topics": [
+            "目标适应症"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 核心使用人群",
+          "target_chars": 900,
+          "topics": [
+            "核心使用人群"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 临床应用场景",
+          "target_chars": 900,
+          "topics": [
+            "临床应用场景"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.5",
+          "chapter": 2,
+          "subtitle": "2.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 患者需求",
+          "target_chars": 1075,
+          "topics": [
+            "患者需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 医生处方需求",
+          "target_chars": 1075,
+          "topics": [
+            "医生处方需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 医院采购需求",
+          "target_chars": 1075,
+          "topics": [
+            "医院采购需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 零售与线上需求",
+          "target_chars": 1075,
+          "topics": [
+            "零售",
+            "线上需求"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.5",
+          "chapter": 3,
+          "subtitle": "3.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1",
+          "target_chars": 1250,
+          "topics": [
+            "要点展开"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2",
+          "target_chars": 1250,
+          "topics": [
+            "要点展开"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 现有治疗药物",
+          "target_chars": 1075,
+          "topics": [
+            "现有治疗药物"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 主要竞品优劣势",
+          "target_chars": 1075,
+          "topics": [
+            "主要竞品优劣势"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 产品差异化空间",
+          "target_chars": 1075,
+          "topics": [
+            "产品差异化空间"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 替代与互补关系",
+          "target_chars": 1075,
+          "topics": [
+            "替代",
+            "互补关系"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.5",
+          "chapter": 5,
+          "subtitle": "5.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 医院端推广路径",
+          "target_chars": 1075,
+          "topics": [
+            "医院端推广路径"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 OTC或院外渠道路径",
+          "target_chars": 1075,
+          "topics": [
+            "OTC或院外渠道路径"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 学术推广策略",
+          "target_chars": 1075,
+          "topics": [
+            "学术推广策略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 价格与渠道策略",
+          "target_chars": 1075,
+          "topics": [
+            "价格",
+            "渠道策略"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.5",
+          "chapter": 6,
+          "subtitle": "6.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 技术风险",
+          "target_chars": 1075,
+          "topics": [
+            "技术风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 注册审批风险",
+          "target_chars": 1075,
+          "topics": [
+            "注册审批风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 市场竞争风险",
+          "target_chars": 1075,
+          "topics": [
+            "市场竞争风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.4",
+          "chapter": 7,
+          "subtitle": "7.4 立项可行性结论",
+          "target_chars": 1075,
+          "topics": [
+            "立项可行性结论"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.5",
+          "chapter": 7,
+          "subtitle": "7.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 4
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    },
+    {
+      "template_id": "drug_template_05",
+      "family": "药品市场报告模板",
+      "path": "template/药品市场报告模板/template5.docx",
+      "chapters": {
+        "1": "第一章 药品基本概况",
+        "2": "第二章 药品所属治疗领域分析",
+        "3": "第三章 药品市场规模分析",
+        "4": "第四章 药品销售数据分析",
+        "5": "第五章 竞争格局分析",
+        "6": "第六章 药品价格与支付体系",
+        "7": "第七章 渠道与终端市场分析",
+        "8": "第八章 政策与监管环境",
+        "9": "第九章 市场机会与风险分析"
+      },
+      "blocks": [
+        {
+          "block_id": "1.1",
+          "chapter": 1,
+          "subtitle": "1.1 药品名称与注册信息",
+          "target_chars": 900,
+          "topics": [
+            "药品名称",
+            "注册信息"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.2",
+          "chapter": 1,
+          "subtitle": "1.2 剂型规格与适应症",
+          "target_chars": 900,
+          "topics": [
+            "剂型规格",
+            "适应症"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.3",
+          "chapter": 1,
+          "subtitle": "1.3 作用机制与临床定位",
+          "target_chars": 900,
+          "topics": [
+            "作用机制",
+            "临床定位"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "1.4",
+          "chapter": 1,
+          "subtitle": "1.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.1",
+          "chapter": 2,
+          "subtitle": "2.1 疾病背景",
+          "target_chars": 1000,
+          "topics": [
+            "疾病背景"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.2",
+          "chapter": 2,
+          "subtitle": "2.2 患者人群规模",
+          "target_chars": 1000,
+          "topics": [
+            "患者人群规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.3",
+          "chapter": 2,
+          "subtitle": "2.3 临床治疗路径",
+          "target_chars": 1000,
+          "topics": [
+            "临床治疗路径"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "2.4",
+          "chapter": 2,
+          "subtitle": "2.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.1",
+          "chapter": 3,
+          "subtitle": "3.1 全球市场规模",
+          "target_chars": 1433,
+          "topics": [
+            "全球市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.2",
+          "chapter": 3,
+          "subtitle": "3.2 中国市场规模",
+          "target_chars": 1433,
+          "topics": [
+            "中国市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.3",
+          "chapter": 3,
+          "subtitle": "3.3 细分市场规模",
+          "target_chars": 1433,
+          "topics": [
+            "细分市场规模"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "3.4",
+          "chapter": 3,
+          "subtitle": "3.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.1",
+          "chapter": 4,
+          "subtitle": "4.1 医院端销售情况",
+          "target_chars": 900,
+          "topics": [
+            "医院端销售情况"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.2",
+          "chapter": 4,
+          "subtitle": "4.2 零售端销售情况",
+          "target_chars": 900,
+          "topics": [
+            "零售端销售情况"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.3",
+          "chapter": 4,
+          "subtitle": "4.3 电商及院外渠道销售情况",
+          "target_chars": 900,
+          "topics": [
+            "电商",
+            "院外渠道销售情况"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "4.4",
+          "chapter": 4,
+          "subtitle": "4.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.1",
+          "chapter": 5,
+          "subtitle": "5.1 同类药品竞争",
+          "target_chars": 1433,
+          "topics": [
+            "同类药品竞争"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.2",
+          "chapter": 5,
+          "subtitle": "5.2 替代药品竞争",
+          "target_chars": 1433,
+          "topics": [
+            "替代药品竞争"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.3",
+          "chapter": 5,
+          "subtitle": "5.3 主要企业竞争",
+          "target_chars": 1433,
+          "topics": [
+            "主要企业竞争"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "5.4",
+          "chapter": 5,
+          "subtitle": "5.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.1",
+          "chapter": 6,
+          "subtitle": "6.1 药品价格区间",
+          "target_chars": 1433,
+          "topics": [
+            "药品价格区间"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.2",
+          "chapter": 6,
+          "subtitle": "6.2 医保支付情况",
+          "target_chars": 1433,
+          "topics": [
+            "医保支付情况"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.3",
+          "chapter": 6,
+          "subtitle": "6.3 集采与降价影响",
+          "target_chars": 1433,
+          "topics": [
+            "集采",
+            "降价影响"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "6.4",
+          "chapter": 6,
+          "subtitle": "6.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.1",
+          "chapter": 7,
+          "subtitle": "7.1 医院市场",
+          "target_chars": 1433,
+          "topics": [
+            "医院市场"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.2",
+          "chapter": 7,
+          "subtitle": "7.2 药店市场",
+          "target_chars": 1433,
+          "topics": [
+            "药店市场"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.3",
+          "chapter": 7,
+          "subtitle": "7.3 互联网医疗市场",
+          "target_chars": 1433,
+          "topics": [
+            "互联网医疗市场"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "7.4",
+          "chapter": 7,
+          "subtitle": "7.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.1",
+          "chapter": 8,
+          "subtitle": "8.1 注册审批政策",
+          "target_chars": 1433,
+          "topics": [
+            "注册审批政策"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.2",
+          "chapter": 8,
+          "subtitle": "8.2 医保目录政策",
+          "target_chars": 1433,
+          "topics": [
+            "医保目录政策"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.3",
+          "chapter": 8,
+          "subtitle": "8.3 药品集采政策",
+          "target_chars": 1433,
+          "topics": [
+            "药品集采政策"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "8.4",
+          "chapter": 8,
+          "subtitle": "8.4 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "9.1",
+          "chapter": 9,
+          "subtitle": "9.1 市场增长机会",
+          "target_chars": 1075,
+          "topics": [
+            "市场增长机会"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "9.2",
+          "chapter": 9,
+          "subtitle": "9.2 竞争风险",
+          "target_chars": 1075,
+          "topics": [
+            "竞争风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "9.3",
+          "chapter": 9,
+          "subtitle": "9.3 政策风险",
+          "target_chars": 1075,
+          "topics": [
+            "政策风险"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "9.4",
+          "chapter": 9,
+          "subtitle": "9.4 战略建议",
+          "target_chars": 1075,
+          "topics": [
+            "战略建议"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        },
+        {
+          "block_id": "9.5",
+          "chapter": 9,
+          "subtitle": "9.5 本章小结",
+          "target_chars": 500,
+          "topics": [
+            "本章小结"
+          ],
+          "evidence_ids": "E01|E08|E10",
+          "fig_ids": ""
+        }
+      ],
+      "market_data_scope": {
+        "chapter": 4
+      },
+      "chapter_min_chars": {
+        "1": 3000,
+        "2": 3500,
+        "3": 4800,
+        "4": 3000,
+        "5": 4800,
+        "6": 4800,
+        "7": 4800,
+        "8": 4800,
+        "9": 4800
+      },
+      "style_names": {
+        "chapter": "一级目录",
+        "section": "二级目录",
+        "subsection": "三级目录",
+        "body": "数据报告正文"
+      }
+    }
+  ]
+}
